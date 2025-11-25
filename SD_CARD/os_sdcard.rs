@@ -84,7 +84,8 @@ where
     spi_txrx(spi, crc);
 
     // Wait for R1 response (MSB must become 0)
-    for _ in 0..=8 {
+    // Some cards need more time, try up to 255 attempts
+    for _ in 0..255 {
         let resp = spi_txrx(spi, 0xFF);
         if resp & 0x80 == 0 {
             return Ok(resp);
@@ -105,18 +106,37 @@ where
     SPI: Transfer<u8>,
     CS: OutputPin,
 {
-    info!("SD init: send 80 clocks");
+    info!("SD init: send 80+ clocks with CS high");
     // Make sure CS is high, send >=74 clocks with MOSI high
     cs.set_high().ok();
-    for _ in 0..10 {
+    for _ in 0..20 {
         let _ = spi_txrx(spi, 0xFF);
     }
+    
+    // Small delay to let card settle
+    cortex_m::asm::delay(10000);
 
-    // CMD0: GO_IDLE_STATE
+    // CMD0: GO_IDLE_STATE - try a few times
     info!("SD init: CMD0");
-    let r1 = sd_send_cmd(spi, cs, 0, 0, 0x95)?;
-    sd_end_cmd(spi, cs);
+    let mut r1 = 0xFF;
+    for attempt in 0..10 {
+        r1 = sd_send_cmd(spi, cs, 0, 0, 0x95)?;
+        sd_end_cmd(spi, cs);
+        
+        info!("CMD0 attempt {=u32}: r1 = {=u8:#04x}", attempt, r1);
+        
+        if r1 == 0x01 {
+            break;
+        }
+        
+        // Delay between attempts
+        for _ in 0..10 {
+            let _ = spi_txrx(spi, 0xFF);
+        }
+    }
+    
     if r1 != 0x01 {
+        error!("CMD0 final r1 = {=u8:#04x}, expected 0x01", r1);
         return Err("CMD0 did not enter IDLE (r1 != 0x01)");
     }
 
@@ -249,6 +269,65 @@ where
 }
 
 // --------------------------------------------------------
+// Write a single 512-byte block (LBA) from `buf`
+// --------------------------------------------------------
+fn sd_write_block<SPI, CS>(
+    spi: &mut SPI,
+    cs: &mut CS,
+    lba: u32,
+    buf: &[u8; 512],
+    high_capacity: bool,
+) -> Result<(), &'static str>
+where
+    SPI: Transfer<u8>,
+    CS: OutputPin,
+{
+    // Address: byte address for SDSC; block address for SDHC/SDXC
+    let addr = if high_capacity { lba } else { lba * 512 };
+
+    info!("Write block: lba={=u32}, addr={=u32}", lba, addr);
+
+    // CMD24: WRITE_SINGLE_BLOCK
+    let r1 = sd_send_cmd(spi, cs, 24, addr, 0x01)?;
+    if r1 != 0x00 {
+        sd_end_cmd(spi, cs);
+        return Err("CMD24 bad R1");
+    }
+
+    // Send start token (0xFE)
+    spi_txrx(spi, 0xFE);
+
+    // Send 512 data bytes
+    for i in 0..512 {
+        spi_txrx(spi, buf[i]);
+    }
+
+    // Send dummy CRC (2 bytes)
+    spi_txrx(spi, 0xFF);
+    spi_txrx(spi, 0xFF);
+
+    // Read data response token
+    let resp = spi_txrx(spi, 0xFF);
+    if (resp & 0x1F) != 0x05 {
+        sd_end_cmd(spi, cs);
+        return Err("Write data rejected");
+    }
+
+    // Wait for card to finish (not busy)
+    for _ in 0..100000 {
+        let busy = spi_txrx(spi, 0xFF);
+        if busy == 0xFF {
+            // Card is no longer busy
+            sd_end_cmd(spi, cs);
+            return Ok(());
+        }
+    }
+
+    sd_end_cmd(spi, cs);
+    Err("Write timeout")
+}
+
+// --------------------------------------------------------
 // Main
 // --------------------------------------------------------
 #[entry]
@@ -329,7 +408,7 @@ fn main() -> ! {
     match sd_read_block(&mut spi, &mut sd_cs, 0, &mut block0, high_capacity) {
         Ok(()) => {
             info!(
-                "Block0 first bytes: {=u8} {=u8} {=u8} {=u8}",
+                "Block0 first bytes: {=u8:#04x} {=u8:#04x} {=u8:#04x} {=u8:#04x}",
                 block0[0],
                 block0[1],
                 block0[2],
@@ -339,6 +418,94 @@ fn main() -> ! {
         Err(e) => {
             error!("Read block0 failed: {}", e);
         }
+    }
+
+    // Example: Write to block 100 (a safe block for testing)
+    // WARNING: This will overwrite data on the SD card!
+    // Only use blocks that don't contain important data
+    info!("Writing test data to block 100...");
+    let mut test_data = [0u8; 512];
+    // Fill with a pattern
+    for i in 0..512 {
+        test_data[i] = (i & 0xFF) as u8;
+    }
+    // Write a signature at the start
+    test_data[0] = 0xDE;
+    test_data[1] = 0xAD;
+    test_data[2] = 0xBE;
+    test_data[3] = 0xEF;
+
+    match sd_write_block(&mut spi, &mut sd_cs, 100, &test_data, high_capacity) {
+        Ok(()) => {
+            info!("Write successful!");
+            
+            // Read it back to verify
+            let mut readback = [0u8; 512];
+            match sd_read_block(&mut spi, &mut sd_cs, 100, &mut readback, high_capacity) {
+                Ok(()) => {
+                    info!(
+                        "Readback first bytes: {=u8:#04x} {=u8:#04x} {=u8:#04x} {=u8:#04x}",
+                        readback[0],
+                        readback[1],
+                        readback[2],
+                        readback[3]
+                    );
+                    
+                    // Verify the data matches
+                    let mut mismatch = false;
+                    for i in 0..512 {
+                        if test_data[i] != readback[i] {
+                            error!("Mismatch at byte {=u32}: wrote {=u8:#04x}, read {=u8:#04x}", 
+                                   i as u32, test_data[i], readback[i]);
+                            mismatch = true;
+                            break;
+                        }
+                    }
+                    
+                    if !mismatch {
+                        info!("Verification PASSED! Data written and read back correctly.");
+                    }
+                }
+                Err(e) => {
+                    error!("Readback failed: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("Write failed: {}", e);
+        }
+    }
+
+    // Test: write block 0
+    let mut block0_buf = [0u8; 512];
+    for i in 0..512 {
+        block0_buf[i] = i as u8;
+    }
+    match sd_write_block(&mut spi, &mut sd_cs, 0, &block0_buf, high_capacity) {
+        Ok(()) => {
+            info!("Block 0 written successfully");
+        }
+        Err(e) => {
+            error!("Write block 0 failed: {}", e);
+        }
+    }
+
+    // Verify: read back the written block
+    let mut block0_readback = [0u8; 512];
+    match sd_read_block(&mut spi, &mut sd_cs, 0, &mut block0_readback, high_capacity) {
+        Ok(()) => {
+            info!("Block 0 read back successfully");
+        }
+        Err(e) => {
+            error!("Read back block 0 failed: {}", e);
+        }
+    }
+
+    // Check if the read-back data matches the written data
+    if block0_buf == block0_readback {
+        info!("Read-back data matches the written data");
+    } else {
+        error!("Read-back data does NOT match the written data");
     }
 
     info!("Done. Looping forever.");
