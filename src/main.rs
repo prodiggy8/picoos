@@ -1,32 +1,34 @@
-//! This example uses the RP Pico W board Wifi chip (cyw43).
-//! Connects to Wifi network and makes a web request to get the current time.
-
 #![no_std]
 #![no_main]
-#![allow(async_fn_in_trait)]
 
-use core::str::from_utf8;
-
-use cyw43::JoinOptions;
-use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
+// Keyboard imports
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_net::tcp::TcpSocket;
-use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_rp::gpio::{Input, Pull, Level, Output};
+use embassy_time::{Duration, Timer};
+use {defmt_rtt as _, panic_probe as _};
+use heapless::String;
+
+// Screen imports
+use core::str::from_utf8;
+use cyw43::JoinOptions;
+use cyw43_pio::{DEFAULT_CLOCK_DIVIDER, PioSpi};
+use embassy_net::tcp::{TcpSocket, State};
 use embassy_net::{Config, Ipv4Address, StackResources};
 use embassy_rp::bind_interrupts;
 use embassy_rp::clocks::RoscRng;
-use embassy_rp::gpio::{Level, Output};
 use embassy_rp::peripherals::{DMA_CH0, PIO0};
 use embassy_rp::pio::{InterruptHandler, Pio};
-use embassy_time::{Duration, Timer};
-use reqwless::client::{HttpClient, TlsConfig, TlsVerify};
-use reqwless::request::Method;
-use serde::Deserialize;
+use embassy_sync::channel::{Channel, Sender};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use static_cell::StaticCell;
-use {defmt_rtt as _, panic_probe as _, serde_json_core};
+use {defmt_rtt as _, panic_probe as _};
 
+// Trait for TcpSocket::write_all
 use embedded_io_async::Write;
+
+// Trait for core::write!
+use core::fmt::Write as FMTWrite;
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -37,6 +39,26 @@ const WIFI_PASSWORD: &str = "ESl@b@123#@!"; // change to your network password
 
 const SERVER_IP: Ipv4Address = Ipv4Address::new(172, 20, 34, 242);
 const SERVER_PORT: u16 = 8080;
+
+struct CounterProcess {
+    running: bool,
+    count: u32,
+    limit: u32,
+    next_update: u64,
+}
+
+struct GameProcess {
+    running: bool,
+    target: u32,
+    input_buffer: String<8>,
+}
+
+#[derive(PartialEq)]
+enum ForegroundTask {
+    Shell,
+    Counter,
+    Game,
+}
 
 #[embassy_executor::task]
 async fn cyw43_task(
@@ -50,22 +72,82 @@ async fn net_task(mut runner: embassy_net::Runner<'static, cyw43::NetDriver<'sta
     runner.run().await
 }
 
+static CHAR_CHANNEL: StaticCell<Channel<ThreadModeRawMutex, char, 32>> = StaticCell::new();
+
+async fn send_masked_char(socket: &mut TcpSocket<'_>, c: char, rng: &mut RoscRng) {
+    let mut frame = [0u8; 8];
+    
+    // FIN bit (bit 7) + Opcode Text (0x1) = 0x81
+    frame[0] = 0x81; 
+    
+    // Byte 1: Mask bit (0x80) + Payload Len (1) = 0x81
+    frame[1] = 0x81;
+
+    // Bytes 2-5: Masking Key (Random)
+    let mut mask_key = [0u8; 4];
+    rng.fill_bytes(&mut mask_key);
+    frame[2] = mask_key[0];
+    frame[3] = mask_key[1];
+    frame[4] = mask_key[2];
+    frame[5] = mask_key[3];
+
+    // data (masked)
+    let data_byte = c as u8;
+    frame[6] = data_byte ^ mask_key[0]; // Simple XOR with first byte of mask since index is 0
+
+    if let Err(e) = socket.write_all(&frame[0..7]).await {
+        warn!("Failed to send char: {:?}", e);
+    }
+}
+
+async fn send_masked_slice(socket: &mut TcpSocket<'_>, payload: &[u8], rng: &mut RoscRng) {
+    let len = payload.len();
+    if len == 0 { return; }
+    
+    // Header (2 bytes) + Mask Key (4 bytes)
+    let mut header = [0u8; 6]; 
+
+    // FIN + Text Frame (0x81)
+    header[0] = 0x81;
+    // Mask bit (0x80) + Length (assuming < 126 for this demo)
+    header[1] = 0x80 | (len as u8);
+
+    // Generate random mask
+    let mut mask_key = [0u8; 4];
+    rng.fill_bytes(&mut mask_key);
+    header[2] = mask_key[0];
+    header[3] = mask_key[1];
+    header[4] = mask_key[2];
+    header[5] = mask_key[3];
+
+    // Send Header
+    if socket.write_all(&header).await.is_err() { return; }
+
+    // Mask Payload (in a temp buffer to avoid allocating too much)
+    let mut masked_buf = [0u8; 256];
+    // Copy and mask at the same time
+    for (i, byte) in payload.iter().enumerate() {
+        if i >= masked_buf.len() { break; }
+        masked_buf[i] = byte ^ mask_key[i % 4];
+    }
+
+    // Send Payload
+    let _ = socket.write_all(&masked_buf[..len]).await;
+}
+
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    info!("Hello World!");
-
     let p = embassy_rp::init(Default::default());
+    let char_channel = CHAR_CHANNEL.init(Channel::new());
     let mut rng = RoscRng;
 
-    // let fw = include_bytes!("../cyw43-firmware/43439A0.bin");
-    // let clm = include_bytes!("../cyw43-firmware/43439A0_clm.bin");
-    // To make flashing faster for development, you may want to flash the firmwares independently
-    // at hardcoded addresses, instead of baking them into the program with `include_bytes!`:
-    //     probe-rs download 43439A0.bin --binary-format bin --chip RP2040 --base-address 0x10100000
-    //     probe-rs download 43439A0_clm.bin --binary-format bin --chip RP2040 --base-address 0x10140000
+    // ===== Network handling =====
+
+    // Firmware
     let fw = unsafe { core::slice::from_raw_parts(0x10100000 as *const u8, 230321) };
     let clm = unsafe { core::slice::from_raw_parts(0x10140000 as *const u8, 4752) };
 
+    // Configuring Wi-Fi module
     let pwr = Output::new(p.PIN_23, Level::Low);
     let cs = Output::new(p.PIN_25, Level::High);
     let mut pio = Pio::new(p.PIO0, Irqs);
@@ -91,12 +173,6 @@ async fn main(spawner: Spawner) {
         .await;
 
     let config = Config::dhcpv4(Default::default());
-    // Use static IP configuration instead of DHCP
-    //let config = embassy_net::Config::ipv4_static(embassy_net::StaticConfigV4 {
-    //    address: Ipv4Cidr::new(Ipv4Address::new(192, 168, 69, 2), 24),
-    //    dns_servers: Vec::new(),
-    //    gateway: Some(Ipv4Address::new(192, 168, 69, 1)),
-    //});
 
     // Generate random seed
     let seed = rng.next_u64();
@@ -131,178 +207,394 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    info!("waiting for link...");
+    println!("[Network] Waiting for link...");
     stack.wait_link_up().await;
 
-    info!("waiting for DHCP...");
+    println!("[Network] Waiting for DHCP...");
     stack.wait_config_up().await;
 
-    // And now we can use it!
-    info!("Stack is up!");
-    
+    println!("[Network] Stack is up!");
+
     let mut rx_buffer = [0; 4096];
     let mut tx_buffer = [0; 4096];
 
+    let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+    socket.set_keep_alive(Some(Duration::from_millis(2500)));
+
+    // ===== Network handling =====
+
+    // ===== OS variables =====
+    let mut counter_proc = CounterProcess { running: false, count: 0, limit: 250, next_update: 0 };
+    let mut game_proc = GameProcess { running: false, target: 0, input_buffer: String::new() };
+    let mut current_focus = ForegroundTask::Shell;
+    
+    let mut shell_buffer = String::<64>::new();
+    let mut output_buffer = String::<256>::new(); // OS Output Buffer
+    
+    // ===== OS variables =====
+
+    // Configure inputs
+    let data: Input<'static> = Input::new(p.PIN_0, Pull::Up);
+    let clk: Input<'static> = Input::new(p.PIN_1, Pull::Up);
+
+    // Spawn keyboard task
+    spawner.spawn(input_reader(clk, data, char_channel.sender())).unwrap();
+
+
     loop {
-        info!("Connecting to WebSocket Server at {}:{}", SERVER_IP, SERVER_PORT);
+        // ===== Network handling =====
+        if socket.state() == State::Closed || socket.state() == State::Closing {
 
-        let mut socket = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
-        socket.set_timeout(Some(Duration::from_secs(10)));
-
-        if let Err(e) = socket.connect((SERVER_IP, SERVER_PORT)).await {
-            info!("Connection failed: {:?}", e);
-            Timer::after(Duration::from_secs(5)).await;
-            continue;
-        }
-
-        info!("Connected via TCP. Sending WebSocket Handshake...");
-
-        let handshake = "GET /shell HTTP/1.1\r\n\
-                         Host: pico-client\r\n\
-                         Upgrade: websocket\r\n\
-                         Connection: Upgrade\r\n\
-                         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
-                         Sec-WebSocket-Version: 13\r\n\
-                         \r\n";
-        
-        if let Err(e) = socket.write_all(handshake.as_bytes()).await {
-            info!("Write error: {:?}", e);
-            continue;
-        }
-
-        let mut buf = [0u8; 512];
-
-        match socket.read(&mut buf).await {
-            Ok(n) => {
-                let response = core::str::from_utf8(&buf[..n]).unwrap_or("");
-                if !response.contains("101 Switching Protocols") {
-                    info!("Server did not upgrade connection: {}", response);
-                    continue;
-                }
-                info!("Upgrade successful");
-            }
-            Err(e) => {
-                info!("Error reading handshake: {:?}", e);
+            if let Err(e) = socket.connect((SERVER_IP, SERVER_PORT)).await {
+                info!("Connection failed: {:?}", e);
+                Timer::after(Duration::from_secs(5)).await;
                 continue;
             }
-        }
 
-        let message = "Hello, Wardf";
+            info!("Connected via TCP");
 
-        for c in message.chars() {
-            send_masked_char(&mut socket, c, &mut rng).await;
-            Timer::after(Duration::from_millis(200)).await;
+            let handshake = "GET /shell HTTP/1.1\r\n\
+                            Host: pico-client\r\n\
+                            Upgrade: websocket\r\n\
+                            Connection: Upgrade\r\n\
+                            Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                            Sec-WebSocket-Version: 13\r\n\
+                            \r\n";
+            
+            if let Err(e) = socket.write_all(handshake.as_bytes()).await {
+                info!("Write error: {:?}", e);
+                continue;
+            }
+
+            let mut buf = [0u8; 512];
+
+            match socket.read(&mut buf).await {
+                Ok(n) => {
+                    let response = core::str::from_utf8(&buf[..n]).unwrap_or("");
+                    if !response.contains("101 Switching Protocols") {
+                        info!("Server did not upgrade connection: {}", response);
+                        continue;
+                    }
+                    info!("Upgrade successful");
+                }
+                Err(e) => {
+                    info!("Error reading handshake: {:?}", e);
+                    continue;
+                }
+            }
         }
+        // ===== Network handling =====
         
-        // Send Backspaces to fix "Wrold" -> "World"
-        for _ in 0..5 {
-            send_masked_char(&mut socket, '\x08', &mut rng).await; // \x08 is Backspace
-            Timer::after(Duration::from_millis(300)).await;
+        // if let Ok(ch) = char_channel.try_receive() {
+        //     send_masked_char(&mut socket, ch, &mut rng).await;
+        // } else {
+        //     Timer::after_micros(10).await;
+        // }
+
+        // OS MAIN LOOP
+        while let Ok(ch) = char_channel.try_receive() {
+
+            // Handle Ctrl-Z
+            if ch == '\x1A' {
+                match current_focus {
+                    ForegroundTask::Counter => {
+                        current_focus = ForegroundTask::Shell;
+                        core::write!(output_buffer, "\r\n[1]+ Stopped counter (Backgrounded)\r\n$ ").ok();
+                    },
+                    ForegroundTask::Game => {
+                        core::write!(output_buffer, "Cannot background Game!\r\nGuess: ").ok();
+                    },
+                    ForegroundTask::Shell => { core::write!(output_buffer, "^Z\r\n$ ").ok(); }
+                }
+                continue;
+            }
+
+            // Route Key to Focused Task
+            match current_focus {
+                ForegroundTask::Shell => {
+                    output_buffer.push(ch).ok(); // Echo
+                    if ch == '\n' {
+                        let cmd = shell_buffer.as_str().trim();
+                        if cmd == "counter" {
+                            counter_proc.running = true;
+                            counter_proc.count = 0;
+                            counter_proc.next_update = embassy_time::Instant::now().as_millis();
+                            current_focus = ForegroundTask::Counter;
+                            core::write!(output_buffer, "Starting counter...\r\n").ok();
+                        } else if cmd == "game" {
+                            game_proc.running = true;
+                            game_proc.target = (rng.next_u32() % 100) + 1;
+                            game_proc.input_buffer.clear();
+                            current_focus = ForegroundTask::Game;
+                            core::write!(output_buffer, "Guess (1-100): ").ok();
+                        } else if !shell_buffer.is_empty() {
+                            core::write!(output_buffer, "Unknown: {}\r\n$ ", cmd).ok();
+                        } else {
+                            core::write!(output_buffer, "$ ").ok();
+                        }
+                        shell_buffer.clear();
+                    } else if ch == '\x08' {
+                        if !shell_buffer.is_empty() { shell_buffer.pop(); }
+                    } else {
+                        shell_buffer.push(ch).ok();
+                    }
+                },
+                ForegroundTask::Game => {
+                    if ch == '\n' {
+                        output_buffer.push_str("\r\n").ok();
+                        if let Ok(guess) = game_proc.input_buffer.as_str().parse::<u32>() {
+                            if guess < game_proc.target {
+                                core::write!(output_buffer, "Bigger!\r\nGuess: ").ok();
+                            } else if guess > game_proc.target {
+                                core::write!(output_buffer, "Smaller!\r\nGuess: ").ok();
+                            } else {
+                                core::write!(output_buffer, "CORRECT! Win.\r\n$ ").ok();
+                                game_proc.running = false;
+                                current_focus = ForegroundTask::Shell;
+                            }
+                        }
+                        game_proc.input_buffer.clear();
+                    } else if ch.is_digit(10) {
+                        output_buffer.push(ch).ok();
+                        game_proc.input_buffer.push(ch).ok();
+                    }
+                },
+                ForegroundTask::Counter => {} // Counter takes no input
+            }
         }
 
-        let correction = "World\n";
-        for char in correction.chars() {
-            send_masked_char(&mut socket, char, &mut rng).await;
-            Timer::after(Duration::from_millis(200)).await;
+        // B. Background Task Management
+        if counter_proc.running {
+            let now = embassy_time::Instant::now().as_millis();
+            if now > counter_proc.next_update + 200 { // 200ms speed
+                counter_proc.count += 1;
+                counter_proc.next_update = now;
+
+                // Only print if focused
+                if current_focus == ForegroundTask::Counter {
+                    core::write!(output_buffer, "{}\r\n", counter_proc.count).ok();
+                }
+
+                if counter_proc.count >= counter_proc.limit {
+                    counter_proc.running = false;
+                    core::write!(output_buffer, "\r\n[Process 'counter' finished!]\r\n").ok();
+                    if current_focus == ForegroundTask::Counter {
+                        output_buffer.push_str("$ ").ok();
+                        current_focus = ForegroundTask::Shell;
+                    }
+                }
+            }
         }
-        
-        info!("done");
-        Timer::after(Duration::from_secs(15)).await;
-        
-        let message2 = "! Hello!";
 
-        for c in message2.chars() {
-            send_masked_char(&mut socket, c, &mut rng).await;
-            Timer::after(Duration::from_millis(200)).await;
+        // C. Video Driver (Batch Send)
+        if !output_buffer.is_empty() {
+            send_masked_slice(&mut socket, output_buffer.as_bytes(), &mut rng).await;
+            output_buffer.clear();
         }
 
-        /*
-        //let client_state = TcpClientState::<1, 1024, 1024>::new();
-        //let tcp_client = TcpClient::new(stack, &client_state);
-        //let dns_client = DnsSocket::new(stack);
-
-        //let mut http_client = HttpClient::new(&tcp_client, &dns_client);
-        //let url = "http://meowfacts.herokuapp.com/";
-
-        //info!("connecting to {}", &url);
-
-        //let mut request = match http_client.request(Method::GET, &url).await {
-        //    Ok(req) => req,
-        //    Err(e) => {
-        //        error!("Failed to make HTTP request: {:?}", e);
-        //        return; // handle the error
-        //    }
-        //};
-
-        //info!("Request done");
-
-        //let response = match request.send(&mut rx_buffer).await {
-        //    Ok(resp) => resp,
-        //    Err(_e) => {
-        //        error!("Failed to send HTTP request");
-        //        return; // handle the error;
-        //    }
-        //};
-
-        //info!("Response done");
-
-        //let body = match from_utf8(response.body().read_to_end().await.unwrap()) {
-        //    Ok(b) => b,
-        //    Err(_e) => {
-        //        error!("Failed to read response body");
-        //        return; // handle the error
-        //    }
-        //};
-        //info!("Response body: {:?}", &body);
-
-        // Parse the JSON response
-        // Visit https://meowfacts.herokuapp.com/ to see the raw json
-        //#[derive(Debug, Deserialize)]
-        //struct ApiResponse<'a> {
-        // Tell the serde json parser that the data from this array will borrow from the input
-        //    #[serde(borrow)]
-        // There is a single field, data, that is an array containing a single string
-        //    data: [&'a str; 1],
-        // other fields as needed
-        //}
-
-        //let bytes = body.as_bytes();
-        //match serde_json_core::de::from_slice::<ApiResponse>(bytes) {
-        //    Ok((output, _used)) => {
-        //        info!("Cat fact: {:?}", output.data[0]);
-        //    }
-        //    Err(_e) => {
-        //        error!("Failed to parse response body");
-        //        return; // handle the error
-        //    }
-        //}
-
-        //Timer::after(Duration::from_secs(30)).await;*/
+        // Yield to Network/Keyboard
+        Timer::after_millis(5).await;
     }
 }
 
-async fn send_masked_char(socket: &mut TcpSocket<'_>, c: char, rng: &mut RoscRng) {
-    let mut frame = [0u8; 8]; // 7 bytes payload
-    
-    // FIN (bit 0; message ended) + Opcode Text (bits 4-7; 0x1 for text)
-    frame[0] = 0x81; 
-    
-    // Byte 1: Mask bit (0x80) + Payload Len (1) = 0x81
-    frame[1] = 0x81;
+/* Embassy has a p.wait_for_falling_edge, however, it returns a future
+ * We can't have awaits in this portion, it is too slow to handle PS2
+ */
+fn wait_for_falling_edge_stable(clk: &Input<'static>) {
+    while clk.is_low() {}
+    while clk.is_high() {}
+}
 
-    // Bytes 2-5: Masking Key (Random)
-    let mut mask_key = [0u8; 4];
-    rng.fill_bytes(&mut mask_key);
-    frame[2] = mask_key[0];
-    frame[3] = mask_key[1];
-    frame[4] = mask_key[2];
-    frame[5] = mask_key[3];
+// PS2 State Machine States
+#[derive(Debug, PartialEq)]
+enum PS2State {
+    Idle,
+    Break,         // Got 0xF0, next is break code
+    Extended,      // Got 0xE0, next is extended code
+    ExtendedBreak, // Got 0xE0 then 0xF0, next is extended break code
+}
 
-    // Byte 6: The data (masked)
-    let data_byte = c as u8;
-    frame[6] = data_byte ^ mask_key[0]; // Simple XOR with first byte of mask since index is 0
+// Converts PS2 scan code to ASCII letter/digit/symbol (if applicable)
+fn scancode_to_char(scancode: u8) -> Option<char> {
+    match scancode {
+        0x1C => Some('a'), 0x32 => Some('b'), 0x21 => Some('c'), 0x23 => Some('d'),
+        0x24 => Some('e'), 0x2B => Some('f'), 0x34 => Some('g'), 0x33 => Some('h'),
+        0x43 => Some('i'), 0x3B => Some('j'), 0x42 => Some('k'), 0x4B => Some('l'),
+        0x3A => Some('m'), 0x31 => Some('n'), 0x44 => Some('o'), 0x4D => Some('p'),
+        0x15 => Some('q'), 0x2D => Some('r'), 0x1B => Some('s'), 0x2C => Some('t'),
+        0x3C => Some('u'), 0x2A => Some('v'), 0x1D => Some('w'), 0x22 => Some('x'),
+        0x35 => Some('y'), 0x1A => Some('z'),
+        0x16 => Some('1'), 0x1E => Some('2'), 0x26 => Some('3'), 0x25 => Some('4'),
+        0x2E => Some('5'), 0x36 => Some('6'), 0x3D => Some('7'), 0x3E => Some('8'),
+        0x46 => Some('9'), 0x45 => Some('0'),
+        0x29 => Some(' '),  // Space
+        0x49 => Some('.'),  // Period/dot
+        0x4A => Some('/'),  // Slash
+        _ => None,
+    }
+}
 
-    if let Err(e) = socket.write_all(&frame[0..7]).await {
-        warn!("Failed to send char: {:?}", e);
+/* Data = high  Clock = high    Idle state
+ * Data = high  Clock = low     Communication Inhibited
+ * Data = low   Clock = high    Host Request-to-Send
+ */
+#[embassy_executor::task]
+async fn input_reader(
+    clk: Input<'static>,
+    data: Input<'static>,
+    sender: Sender<'static, ThreadModeRawMutex, char, 32>
+) {
+    let mut state = PS2State::Idle;
+    let mut ctrl_pressed = false;
+    let mut current_line = String::<256>::new();
+
+    loop {
+        // Burst polling!
+        let mut caught_edge = false;
+        
+        // Sample appropriately
+        for _ in 0..2000 {
+            if clk.is_low() {
+                caught_edge = true;
+                break;
+            }
+        }
+
+        // If no character in this period, just yield to let network work!
+        if !caught_edge {
+            Timer::after_micros(10).await; 
+            continue;
+        }
+        
+        // Brute-force disable embassy's asynchronicity, otherwise too slow
+        let (code, parity, stop) = cortex_m::interrupt::free(|_| {
+            let mut code: u8 = 0;
+            for i in 0..8 {
+                wait_for_falling_edge_stable(&clk);
+
+                if data.is_high() {
+                    code |= 1 << i;
+                }
+            }
+
+            // Parity check
+            wait_for_falling_edge_stable(&clk);
+            let parity: bool = data.is_high();
+            
+            // Stop signal is always high
+            wait_for_falling_edge_stable(&clk);
+            let stop: bool = data.is_high();
+
+            (code, parity, stop)
+        });
+        
+        // Stop signal is always high
+        if !stop {
+            warn!("PS2 bad stop bit, got byte {=u8:02x}", code);
+        } else {
+            let parity_bit: u32 = if parity { 1 } else { 0 };
+            let parity_chk: bool = ((code.count_ones() + parity_bit) & 1) == 1;
+
+            if !parity_chk {
+                warn!("PS2 parity error, got byte {=u8:02x}", code);
+            } else {
+                // State machine for PS2 protocol
+                match state {
+                    PS2State::Idle => {
+                        match code {
+                            0xF0 => {
+                                // Break code prefix
+                                state = PS2State::Break;
+                            }
+                            0xE0 => {
+                                // Extended code prefix
+                                state = PS2State::Extended;
+                            }
+                            0x14 => {
+                                // Left or Right Ctrl pressed
+                                ctrl_pressed = true;
+                                println!("CTRL pressed");
+                            }
+                            0x66 => {
+                                current_line.pop();
+                                // println!("{}", current_line.as_str());
+                                sender.try_send('\x08').ok();
+                            }
+                            0x5A => {
+                                // println!("{}", current_line.as_str());
+                                current_line.clear();
+                                sender.try_send('\n').ok();
+                            }
+                            _ => {
+                                // Check if it's a letter or digit
+                                if let Some(ch) = scancode_to_char(code) {
+                                    if ctrl_pressed {
+                                        // Handle Ctrl+key combinations
+                                        match ch {
+                                            'c' => {
+                                                println!("CTRL-C");
+                                                sender.try_send('\x03').ok();
+                                            }
+                                            'z' => {
+                                                println!("CTRL-Z");
+                                                sender.try_send('\x1A').ok();
+                                            }
+                                            _ => println!("CTRL+{}", ch),
+                                        }
+                                    } else {
+                                        let _ = current_line.push(ch);
+                                        // println!("{}", current_line.as_str());
+                                        sender.try_send(ch).ok();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    PS2State::Break => {
+                        // Key released
+                        if code == 0x14 {
+                            // Ctrl released
+                            ctrl_pressed = false;
+                            println!("CTRL released");
+                        }
+                        state = PS2State::Idle;
+                    }
+                    PS2State::Extended => {
+                        // Extended key codes (arrows, home, end, etc.)
+                        match code {
+                            0xF0 => {
+                                // Extended break code coming next
+                                state = PS2State::ExtendedBreak;
+                            }
+                            0x6B => {
+                                println!("Key event: ARROW LEFT");
+                                state = PS2State::Idle;
+                            }
+                            0x74 => {
+                                println!("Key event: ARROW RIGHT");
+                                state = PS2State::Idle;
+                            }
+                            0x6C => {
+                                println!("Key event: HOME");
+                                state = PS2State::Idle;
+                            }
+                            0x69 => {
+                                println!("Key event: END");
+                                state = PS2State::Idle;
+                            }
+                            _ => {
+                                state = PS2State::Idle;
+                            }
+                        }
+                    }
+                    PS2State::ExtendedBreak => {
+                        // Extended key released - ignore for now
+                        state = PS2State::Idle;
+                    }
+                }
+            }
+        }
+        
+        Timer::after_micros(10).await;
     }
 }
