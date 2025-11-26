@@ -27,6 +27,9 @@ use {defmt_rtt as _, panic_probe as _};
 // Trait for TcpSocket::write_all
 use embedded_io_async::Write;
 
+// Trait for core::write!
+use core::fmt::Write as FMTWrite;
+
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
 });
@@ -36,6 +39,26 @@ const WIFI_PASSWORD: &str = "ESl@b@123#@!"; // change to your network password
 
 const SERVER_IP: Ipv4Address = Ipv4Address::new(172, 20, 34, 242);
 const SERVER_PORT: u16 = 8080;
+
+struct CounterProcess {
+    running: bool,
+    count: u32,
+    limit: u32,
+    next_update: u64,
+}
+
+struct GameProcess {
+    running: bool,
+    target: u32,
+    input_buffer: String<8>,
+}
+
+#[derive(PartialEq)]
+enum ForegroundTask {
+    Shell,
+    Counter,
+    Game,
+}
 
 #[embassy_executor::task]
 async fn cyw43_task(
@@ -75,6 +98,41 @@ async fn send_masked_char(socket: &mut TcpSocket<'_>, c: char, rng: &mut RoscRng
     if let Err(e) = socket.write_all(&frame[0..7]).await {
         warn!("Failed to send char: {:?}", e);
     }
+}
+
+async fn send_masked_slice(socket: &mut TcpSocket<'_>, payload: &[u8], rng: &mut RoscRng) {
+    let len = payload.len();
+    if len == 0 { return; }
+    
+    // Header (2 bytes) + Mask Key (4 bytes)
+    let mut header = [0u8; 6]; 
+
+    // FIN + Text Frame (0x81)
+    header[0] = 0x81;
+    // Mask bit (0x80) + Length (assuming < 126 for this demo)
+    header[1] = 0x80 | (len as u8);
+
+    // Generate random mask
+    let mut mask_key = [0u8; 4];
+    rng.fill_bytes(&mut mask_key);
+    header[2] = mask_key[0];
+    header[3] = mask_key[1];
+    header[4] = mask_key[2];
+    header[5] = mask_key[3];
+
+    // Send Header
+    if socket.write_all(&header).await.is_err() { return; }
+
+    // Mask Payload (in a temp buffer to avoid allocating too much)
+    let mut masked_buf = [0u8; 256];
+    // Copy and mask at the same time
+    for (i, byte) in payload.iter().enumerate() {
+        if i >= masked_buf.len() { break; }
+        masked_buf[i] = byte ^ mask_key[i % 4];
+    }
+
+    // Send Payload
+    let _ = socket.write_all(&masked_buf[..len]).await;
 }
 
 #[embassy_executor::main]
@@ -165,12 +223,23 @@ async fn main(spawner: Spawner) {
 
     // ===== Network handling =====
 
+    // ===== OS variables =====
+    let mut counter_proc = CounterProcess { running: false, count: 0, limit: 250, next_update: 0 };
+    let mut game_proc = GameProcess { running: false, target: 0, input_buffer: String::new() };
+    let mut current_focus = ForegroundTask::Shell;
+    
+    let mut shell_buffer = String::<64>::new();
+    let mut output_buffer = String::<256>::new(); // OS Output Buffer
+    
+    // ===== OS variables =====
+
     // Configure inputs
     let data: Input<'static> = Input::new(p.PIN_0, Pull::Up);
     let clk: Input<'static> = Input::new(p.PIN_1, Pull::Up);
 
     // Spawn keyboard task
     spawner.spawn(input_reader(clk, data, char_channel.sender())).unwrap();
+
 
     loop {
         // ===== Network handling =====
@@ -216,11 +285,115 @@ async fn main(spawner: Spawner) {
         }
         // ===== Network handling =====
         
-        if let Ok(ch) = char_channel.try_receive() {
-            send_masked_char(&mut socket, ch, &mut rng).await;
-        } else {
-            Timer::after_micros(10).await;
+        // if let Ok(ch) = char_channel.try_receive() {
+        //     send_masked_char(&mut socket, ch, &mut rng).await;
+        // } else {
+        //     Timer::after_micros(10).await;
+        // }
+
+        // OS MAIN LOOP
+        while let Ok(ch) = char_channel.try_receive() {
+
+            // Handle Ctrl-Z
+            if ch == '\x1A' {
+                match current_focus {
+                    ForegroundTask::Counter => {
+                        current_focus = ForegroundTask::Shell;
+                        core::write!(output_buffer, "\r\n[1]+ Stopped counter (Backgrounded)\r\n$ ").ok();
+                    },
+                    ForegroundTask::Game => {
+                        core::write!(output_buffer, "Cannot background Game!\r\nGuess: ").ok();
+                    },
+                    ForegroundTask::Shell => { core::write!(output_buffer, "^Z\r\n$ ").ok(); }
+                }
+                continue;
+            }
+
+            // Route Key to Focused Task
+            match current_focus {
+                ForegroundTask::Shell => {
+                    output_buffer.push(ch).ok(); // Echo
+                    if ch == '\n' {
+                        let cmd = shell_buffer.as_str().trim();
+                        if cmd == "counter" {
+                            counter_proc.running = true;
+                            counter_proc.count = 0;
+                            counter_proc.next_update = embassy_time::Instant::now().as_millis();
+                            current_focus = ForegroundTask::Counter;
+                            core::write!(output_buffer, "Starting counter...\r\n").ok();
+                        } else if cmd == "game" {
+                            game_proc.running = true;
+                            game_proc.target = (rng.next_u32() % 100) + 1;
+                            game_proc.input_buffer.clear();
+                            current_focus = ForegroundTask::Game;
+                            core::write!(output_buffer, "Guess (1-100): ").ok();
+                        } else if !shell_buffer.is_empty() {
+                            core::write!(output_buffer, "Unknown: {}\r\n$ ", cmd).ok();
+                        } else {
+                            core::write!(output_buffer, "$ ").ok();
+                        }
+                        shell_buffer.clear();
+                    } else if ch == '\x08' {
+                        if !shell_buffer.is_empty() { shell_buffer.pop(); }
+                    } else {
+                        shell_buffer.push(ch).ok();
+                    }
+                },
+                ForegroundTask::Game => {
+                    if ch == '\n' {
+                        output_buffer.push_str("\r\n").ok();
+                        if let Ok(guess) = game_proc.input_buffer.as_str().parse::<u32>() {
+                            if guess < game_proc.target {
+                                core::write!(output_buffer, "Bigger!\r\nGuess: ").ok();
+                            } else if guess > game_proc.target {
+                                core::write!(output_buffer, "Smaller!\r\nGuess: ").ok();
+                            } else {
+                                core::write!(output_buffer, "CORRECT! Win.\r\n$ ").ok();
+                                game_proc.running = false;
+                                current_focus = ForegroundTask::Shell;
+                            }
+                        }
+                        game_proc.input_buffer.clear();
+                    } else if ch.is_digit(10) {
+                        output_buffer.push(ch).ok();
+                        game_proc.input_buffer.push(ch).ok();
+                    }
+                },
+                ForegroundTask::Counter => {} // Counter takes no input
+            }
         }
+
+        // B. Background Task Management
+        if counter_proc.running {
+            let now = embassy_time::Instant::now().as_millis();
+            if now > counter_proc.next_update + 200 { // 200ms speed
+                counter_proc.count += 1;
+                counter_proc.next_update = now;
+
+                // Only print if focused
+                if current_focus == ForegroundTask::Counter {
+                    core::write!(output_buffer, "{}\r\n", counter_proc.count).ok();
+                }
+
+                if counter_proc.count >= counter_proc.limit {
+                    counter_proc.running = false;
+                    core::write!(output_buffer, "\r\n[Process 'counter' finished!]\r\n").ok();
+                    if current_focus == ForegroundTask::Counter {
+                        output_buffer.push_str("$ ").ok();
+                        current_focus = ForegroundTask::Shell;
+                    }
+                }
+            }
+        }
+
+        // C. Video Driver (Batch Send)
+        if !output_buffer.is_empty() {
+            send_masked_slice(&mut socket, output_buffer.as_bytes(), &mut rng).await;
+            output_buffer.clear();
+        }
+
+        // Yield to Network/Keyboard
+        Timer::after_millis(5).await;
     }
 }
 
@@ -358,8 +531,14 @@ async fn input_reader(
                                     if ctrl_pressed {
                                         // Handle Ctrl+key combinations
                                         match ch {
-                                            'c' => println!("CTRL-C"),
-                                            'z' => println!("CTRL-Z"),
+                                            'c' => {
+                                                println!("CTRL-C");
+                                                sender.try_send('\x03').ok();
+                                            }
+                                            'z' => {
+                                                println!("CTRL-Z");
+                                                sender.try_send('\x1A').ok();
+                                            }
                                             _ => println!("CTRL+{}", ch),
                                         }
                                     } else {
