@@ -17,7 +17,7 @@ echo -e "${BLUE}📦 Building project...${NC}"
 cargo build --release
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Build successful!${NC}"
+    echo -e "${GREEN} Build successful!${NC}"
     echo ""
     
     # Check binary size
@@ -40,17 +40,17 @@ if [ $? -eq 0 ]; then
     
     # Check if elf2uf2-rs is installed
     if command -v elf2uf2-rs &> /dev/null; then
-        echo -e "${GREEN}✅ elf2uf2-rs is installed${NC}"
+        echo -e "${GREEN} elf2uf2-rs is installed${NC}"
         echo "   You can use 'cargo run --release' to flash via USB"
     else
-        echo -e "${YELLOW}⚠️  elf2uf2-rs not found${NC}"
+        echo -e "${YELLOW} elf2uf2-rs not found${NC}"
         echo "   Install with: cargo install elf2uf2-rs --locked"
     fi
     echo ""
     
     # Check for probe-rs
     if command -v probe-rs &> /dev/null; then
-        echo -e "${GREEN}✅ probe-rs is installed${NC}"
+        echo -e "${GREEN} probe-rs is installed${NC}"
         echo "   You can use debug probe for flashing and logging"
     else
         echo -e "${YELLOW}⚠️  probe-rs not found${NC}"
@@ -58,7 +58,7 @@ if [ $? -eq 0 ]; then
     fi
     
 else
-    echo -e "${YELLOW}❌ Build failed!${NC}"
+    echo -e "${YELLOW} Build failed!${NC}"
     exit 1
 fi
 
