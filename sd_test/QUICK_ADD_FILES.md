@@ -1,10 +1,10 @@
-# 🚀 Quick Reference: Add Files & Directories
+#  Quick Reference: Add Files & Directories
 
 ## Copy-Paste Code Snippets
 
 ---
 
-## 📁 **Create a Directory**
+##  **Create a Directory**
 
 ```rust
 // In root directory
@@ -18,7 +18,7 @@ match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_clu
 
 ---
 
-## 📄 **Create a File in Root**
+##  **Create a File in Root**
 
 ```rust
 let content = b"Your file content here!";
@@ -30,7 +30,7 @@ match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", cont
 
 ---
 
-## 📂 **Create a File in Subdirectory**
+##  **Create a File in Subdirectory**
 
 ```rust
 // First create the directory
@@ -46,7 +46,7 @@ match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DATA/SENSOR.TXT",
 
 ---
 
-## 🗂️ **Create Multiple Directories**
+##  **Create Multiple Directories**
 
 ```rust
 let directories = ["PROJECTS", "PHOTOS", "LOGS", "CONFIG"];
@@ -60,7 +60,7 @@ for dir_name in &directories {
 
 ---
 
-## 📝 **Create Multiple Files**
+##  **Create Multiple Files**
 
 ```rust
 let files = [
@@ -79,7 +79,7 @@ for (path, content) in &files {
 
 ---
 
-## 🌲 **Create Directory Tree**
+##  **Create Directory Tree**
 
 ```rust
 // Create main directory
@@ -100,7 +100,7 @@ match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_clu
 
 ---
 
-## 📊 **Real-World Example: Data Logging**
+##  **Real-World Example: Data Logging**
 
 ```rust
 // Create logging system
@@ -137,42 +137,15 @@ match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/LOGS/SENSOR.CSV",
 
 ---
 
-## 🎮 **Where to Add Your Code**
+##  **Where to Add Your Code**
 
 ### Option 1: In the Custom Section (Recommended)
 Open `src/main.rs` and find this section (around line 1200):
 
 ```rust
-// ========================================================================
-// 🎨 YOUR CUSTOM FILES - Add your own files and directories here!
-// ========================================================================
-// Uncomment and edit the examples below:
 
-/*
-info!("\n=== Creating Custom Files ===");
-
-// YOUR CODE HERE!
-
-*/
 ```
-
-**Uncomment the block** (remove `/*` and `*/`) and add your code inside!
-
-### Option 2: Create a New Test Section
-Add anywhere before the final summary:
-
-```rust
-// ========================================================================
-// MY CUSTOM TEST
-// ========================================================================
-info!("\n=== My Custom Files ===");
-
-// Your code here
-```
-
----
-
-## 🔨 **Full Working Example**
+##  **Full Working Example**
 
 Here's a complete example you can paste into the custom section:
 
@@ -203,12 +176,12 @@ fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/PERSONAL/IDEAS.TXT", pe
 let archive = b"Archive created: 2025-11-29\nOld project files stored here.\n";
 fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/ARCHIVE/README.TXT", archive, high_capacity).ok();
 
-info!("✅ Personal workspace ready!");
+info!(" Personal workspace ready!");
 ```
 
 ---
 
-## ✅ **Testing Your Files**
+## **Testing Your Files**
 
 After adding files, verify them:
 
@@ -232,7 +205,7 @@ match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/WORK/TODO.TXT", &m
 
 ---
 
-## 🎯 **Next Steps**
+##  **Next Steps**
 
 1. **Edit `src/main.rs`** - Find the "YOUR CUSTOM FILES" section
 2. **Uncomment the examples** or add your own code
@@ -243,7 +216,7 @@ match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/WORK/TODO.TXT", &m
 
 ---
 
-## 💡 **Pro Tips**
+##  **Pro Tips**
 
 - **Keep filenames short**: Max 8 chars + 3 char extension
 - **Use uppercase**: It's automatic but keeps things consistent
@@ -251,4 +224,3 @@ match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/WORK/TODO.TXT", &m
 - **Check the logs**: They show exactly what succeeded/failed
 - **Verify on PC**: Always check the SD card on your computer to confirm
 
-Happy coding! 🚀

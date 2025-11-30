@@ -1,4 +1,4 @@
-## 🎯 You're Ready to Flash!
+##  You're Ready to Flash!
 
 ### Hardware Setup Checklist:
 - [ ] Debug probe connected to Pico (SWD + Ground)

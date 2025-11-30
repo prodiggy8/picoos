@@ -1,12 +1,11 @@
-# 📝 File Rename & Move Guide
+#  File Rename & Move Guide
 
-## 🎯 Overview
+##  Overview
 
 Your FAT32 filesystem now supports **renaming** and **moving** files! This guide shows you how to use these powerful features.
 
 ---
-
-## 🔄 File Renaming
+##  File Renaming
 
 ### Basic Renaming
 
@@ -42,7 +41,7 @@ fat32_rename_file_at_path(
 
 ---
 
-## 🚚 File Moving
+##  File Moving
 
 ### Move to Different Directory
 
@@ -60,8 +59,8 @@ fat32_move_file(
 ```
 
 **Result:** 
-- ❌ Deleted: `/README.TXT`
-- ✅ Created: `/MUSIC/INFO.TXT`
+-  Deleted: `/README.TXT`
+-  Created: `/MUSIC/INFO.TXT`
 
 ### Move AND Rename
 
@@ -79,12 +78,12 @@ fat32_move_file(
 ```
 
 **Result:**
-- ❌ Deleted: `/DOCS/REPORT.TXT`
-- ✅ Created: `/MUSIC/NOTES.TXT`
+-  Deleted: `/DOCS/REPORT.TXT`
+-  Created: `/MUSIC/NOTES.TXT`
 
 ---
 
-## 📋 Key Functions
+## Key Functions
 
 ### 1. `fat32_rename_file_at_path`
 
@@ -95,9 +94,9 @@ Rename a file in its current directory.
 - `new_name` - New filename in 8.3 format (e.g., `WELCOME.TXT`)
 
 **What it does:**
-- ✅ Updates the directory entry with new name
-- ✅ Preserves file content, size, and cluster chain
-- ❌ Fails if new name already exists
+- Updates the directory entry with new name
+- Preserves file content, size, and cluster chain
+- Fails if new name already exists
 
 ### 2. `fat32_move_file`
 
@@ -108,14 +107,14 @@ Move a file to a different directory (optionally renaming it).
 - `dest_path` - Destination path with new name (e.g., `/MUSIC/INFO.TXT`)
 
 **What it does:**
-- ✅ Creates new directory entry in destination
-- ✅ Removes old directory entry from source
-- ✅ Preserves file data (no copying needed!)
-- ❌ Fails if destination file already exists
+- Creates new directory entry in destination
+- Removes old directory entry from source
+- Preserves file data (no copying needed!)
+- Fails if destination file already exists
 
 ---
 
-## ⚠️ Important Notes
+##  Important Notes
 
 ### 8.3 Filename Format
 
@@ -124,8 +123,8 @@ Both operations require **8.3 format** filenames:
 - **Maximum 3 characters** for extension
 - **Uppercase automatically**
 
-✅ Valid: `README.TXT`, `MANUAL.DOC`, `DATA.BIN`  
-❌ Invalid: `VERYLONGFILENAME.TXT`, `FILE.HTML`
+Valid: `README.TXT`, `MANUAL.DOC`, `DATA.BIN`  
+Invalid: `VERYLONGFILENAME.TXT`, `FILE.HTML`
 
 ### Error Handling
 
@@ -138,10 +137,10 @@ Common errors:
 ### What Gets Preserved?
 
 When renaming or moving:
-- ✅ **File content** (no data is copied or changed)
-- ✅ **File size**
-- ✅ **Cluster chain** (same physical location on SD card)
-- ✅ **File attributes** (archive, directory, etc.)
+- **File content** (no data is copied or changed)
+- **File size**
+- **Cluster chain** (same physical location on SD card)
+- **File attributes** (archive, directory, etc.)
 
 ### Performance
 
@@ -152,7 +151,7 @@ Both operations are **very fast** because:
 
 ---
 
-## 💡 Usage Examples
+## Usage Examples
 
 ### Example 1: Organize Your Files
 
@@ -190,7 +189,7 @@ fat32_move_file(&mut spi, &mut cs, &fat_info,
 
 ---
 
-## 🧪 Test Results
+## Test Results
 
 Running the built-in tests will:
 
@@ -219,23 +218,3 @@ After running all tests:
 ```
 
 ---
-
-## 🚀 Next Steps
-
-Now that you have rename and move, you could add:
-
-1. **Copy files** (duplicate file data to new location)
-2. **Batch operations** (rename/move multiple files)
-3. **Undo/redo** (keep track of file operations)
-4. **Directory moving** (move entire directories)
-5. **File attributes** (mark files as read-only, hidden, etc.)
-
----
-
-## 📚 Related Documentation
-
-- **QUICK_ADD_FILES.md** - How to create files
-- **FILE_DELETION_GUIDE.md** - How to delete files/directories
-- **VERIFICATION_GUIDE.md** - How to verify filesystem operations
-
-Happy file management! 🎉

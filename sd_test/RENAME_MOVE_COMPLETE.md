@@ -1,6 +1,6 @@
-# 🎉 File Rename & Move - Implementation Complete!
+# File Rename & Move - Implementation Complete!
 
-## ✅ What We Just Added
+## What We Just Added
 
 Your FAT32 filesystem now has **full file management capabilities** including:
 
@@ -24,7 +24,7 @@ Your FAT32 filesystem now has **full file management capabilities** including:
 
 ---
 
-## 🚀 Quick Examples
+## Quick Examples
 
 ### Rename a File
 ```rust
@@ -58,7 +58,7 @@ fat32_move_file(&mut spi, &mut cs, &fat_info,
 
 ---
 
-## 📊 Expected Test Results
+## Expected Test Results
 
 When you run the updated code, you'll see:
 
@@ -105,14 +105,14 @@ When you run the updated code, you'll see:
 4. **File data stays in same clusters!**
 
 ### Why It's Fast
-- ✅ No file data is read or written
-- ✅ Only directory entries are modified
-- ✅ Cluster chain is reused
-- ✅ Instant for any file size!
+- No file data is read or written
+- Only directory entries are modified
+- Cluster chain is reused
+- Instant for any file size!
 
 ---
 
-## 💡 Usage Patterns
+##  Usage Patterns
 
 ### Pattern 1: Version Management
 ```rust
@@ -167,20 +167,6 @@ Your filesystem now supports:
 | Path Navigation | ✅ | Fast |
 | Multi-cluster Files | ✅ | Medium |
 | Verification | ✅ | Fast |
-
----
-
-## 🎯 What's Next?
-
-Now that you have rename and move, consider adding:
-
-1. **File Copying** - Duplicate files (requires data copy)
-2. **Directory Moving** - Move entire directory trees
-3. **Batch Operations** - Rename/move multiple files
-4. **Long Filenames** - Support names longer than 8.3
-5. **File Attributes** - Read-only, hidden, system flags
-6. **Timestamps** - Creation, modification, access times
-
 ---
 
 ## 📖 Documentation
@@ -192,7 +178,7 @@ Now that you have rename and move, consider adding:
 
 ---
 
-## 🏃 Ready to Run!
+## Ready to Run!
 
 ### Build
 ```bash
@@ -216,7 +202,7 @@ probe-rs run --chip RP2040 target/thumbv6m-none-eabi/release/sd_test
 
 ---
 
-## ✨ Key Improvements
+##  Key Improvements
 
 Before:
 ```rust
@@ -245,16 +231,3 @@ After:
 fat32_move_file(..., "/SRC.TXT", "/DEST/SRC.TXT", ...)?;
 ```
 
----
-
-## 🎊 Congratulations!
-
-You now have a **production-quality** file management system with:
-- ✅ Full CRUD operations (Create, Read, Update, Delete)
-- ✅ Directory management
-- ✅ File organization (rename/move)
-- ✅ Path-based navigation
-- ✅ Comprehensive error handling
-- ✅ Well-documented code
-
-Your Pico OS is getting serious! 🚀

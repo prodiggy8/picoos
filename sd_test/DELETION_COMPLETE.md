@@ -1,6 +1,6 @@
-# 🎉 File Deletion - Complete Implementation
+#  File Deletion - Complete Implementation
 
-## ✅ **What's Been Added**
+##  **What's Been Added**
 
 Your FAT32 filesystem now has **full file and directory deletion capabilities**!
 
@@ -13,7 +13,7 @@ Your FAT32 filesystem now has **full file and directory deletion capabilities**!
 
 ---
 
-## 🚀 **How to Use**
+##  **How to Use**
 
 ### **Delete a File:**
 ```rust
@@ -33,7 +33,7 @@ match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/EMPTYDIR", 
 
 ---
 
-## 🔧 **How It Works**
+##  **How It Works**
 
 ### **File Deletion:**
 1. Finds the file in the directory
@@ -48,18 +48,17 @@ match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/EMPTYDIR", 
 
 ---
 
-## 📊 **Features**
+##  **Features**
 
-✅ **Complete FAT chain cleanup** - All clusters are freed  
-✅ **Path-based deletion** - Easy to use  
-✅ **Directory cluster deletion** - For advanced use  
-✅ **Safety checks** - Won't delete non-empty directories  
-✅ **Error handling** - Clear error messages  
-✅ **Verification support** - Check deletion succeeded  
+ **Complete FAT chain cleanup** - All clusters are freed  
+ **Path-based deletion** - Easy to use  
+ **Directory cluster deletion** - For advanced use  
+ **Safety checks** - Won't delete non-empty directories  
+ **Error handling** - Clear error messages  
 
+ **Verification support** - Check deletion succeeded  
 ---
-
-## 🧪 **Testing**
+## **Testing**
 
 The code includes **TEST 6** which demonstrates:
 
@@ -72,7 +71,7 @@ The code includes **TEST 6** which demonstrates:
 
 ---
 
-## 📝 **Example Use Cases**
+##  **Example Use Cases**
 
 ### **Clean up temporary files:**
 ```rust
@@ -104,7 +103,7 @@ fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/TEMP", high_capac
 
 ---
 
-## ⚠️ **Important Notes**
+##  **Important Notes**
 
 - **Deletion is permanent** - No undo or trash bin
 - **Directories must be empty** - Delete all files first
@@ -113,7 +112,7 @@ fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/TEMP", high_capac
 
 ---
 
-## 📚 **Documentation**
+##  **Documentation**
 
 - **[FILE_DELETION_GUIDE.md](FILE_DELETION_GUIDE.md)** - Complete guide with examples
 - **[QUICK_ADD_FILES.md](QUICK_ADD_FILES.md)** - How to add files (updated)
@@ -121,26 +120,13 @@ fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/TEMP", high_capac
 
 ---
 
-## 🎯 **Complete Feature List**
+##  **Complete Feature List**
 
-Your filesystem now supports:
 
-| Feature | Status |
-|---------|--------|
-| File creation | ✅ Working |
-| File reading | ✅ Working |
-| File writing (multi-cluster) | ✅ Working |
-| File deletion | ✅ **NEW!** |
-| Directory creation | ✅ Working |
-| Directory listing | ✅ Working |
-| Directory deletion | ✅ **NEW!** |
-| Path navigation | ✅ Working |
-| Subdirectories | ✅ Working |
-| File verification | ✅ Working |
 
 ---
 
-## 🚀 **Try It Now!**
+## **Try It Now!**
 
 ```bash
 # Build and flash
@@ -172,7 +158,7 @@ Check **[NEXT_STEPS_ROADMAP.md](NEXT_STEPS_ROADMAP.md)** for more ideas!
 
 ---
 
-## 💡 **Implementation Details**
+##  **Implementation Details**
 
 ### **Functions Added:**
 

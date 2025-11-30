@@ -1,8 +1,8 @@
-# 🔍 Filesystem Verification Guide
+#  Filesystem Verification Guide
 
 ## How to Check Your SD Card Contents
 
-### Method 1: Check on Your Computer (Recommended) 💻
+### Method 1: Check on Your Computer (Recommended) 
 
 1. **Stop your Pico** - Unplug it from power/USB
 2. **Remove the SD card** from the Pico
@@ -36,7 +36,7 @@ Built with Rust!
 
 ---
 
-### Method 2: Check Serial Monitor Output 📟
+### Method 2: Check Serial Monitor Output 
 
 When you run the program with `./flash.sh`, the serial output will show:
 
@@ -64,7 +64,7 @@ INFO    ✓ FILE exists: /DOCS/REPORT.TXT
 INFO    ✓ DIR exists: /DOCS/REPORTS
 INFO    ✓ DIR exists: /MUSIC
 
-INFO  ✅ All files and directories verified successfully!
+INFO   All files and directories verified successfully!
 ```
 
 ---
@@ -127,7 +127,7 @@ dir E:\DOCS\REPORT.TXT
 
 ---
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### "I don't see the files!"
 
@@ -160,7 +160,7 @@ dir E:\DOCS\REPORT.TXT
 
 ---
 
-## ✅ Expected Results
+## Expected Results
 
 After running the program successfully, you should have:
 
@@ -185,10 +185,10 @@ Run the updated program:
 
 Look for this line in the output:
 ```
-✅ All files and directories verified successfully!
+All files and directories verified successfully!
 ```
 
-If you see that, everything is working! 🎉
+If you see that, everything is working! 
 
 ---
 
@@ -196,7 +196,7 @@ If you see that, everything is working! 🎉
 
 **Serial Monitor Output:**
 ```
-INFO  🎉 All filesystem tests complete!
+INFO   All filesystem tests complete!
 INFO  Features demonstrated:
 INFO    ✓ Multi-cluster file reading/writing
 INFO    ✓ Directory creation
@@ -214,7 +214,7 @@ INFO    ✓ File/directory verification
 
 ---
 
-## 💡 Tips
+##  Tips
 
 - **Always safely eject** the SD card from your Pico before removing it
 - **Format as FAT32** - not exFAT or NTFS

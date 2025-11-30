@@ -1,10 +1,10 @@
-# 📁 How to Add Files and Directories to Your Filesystem
+#  How to Add Files and Directories to Your Filesystem
 
-## 🎯 Three Ways to Add Files and Directories
+##  Three Ways to Add Files and Directories
 
 ---
 
-## **Method 1: Edit the Code (Recommended for Custom Content)** ⭐
+## **Method 1: Edit the Code (Recommended for Custom Content)** 
 
 ### Step 1: Open `src/main.rs`
 
@@ -142,7 +142,7 @@ fat32_write_file_in_dir(
 
 ---
 
-## 📝 **Filename Rules (8.3 Format)**
+##  **Filename Rules (8.3 Format)**
 
 Your filesystem uses the classic **8.3 format**:
 - **Max 8 characters** for the filename
@@ -150,7 +150,7 @@ Your filesystem uses the classic **8.3 format**:
 - **No spaces** (use uppercase)
 - **All uppercase** is automatic
 
-### ✅ Valid Filenames:
+###  Valid Filenames:
 ```
 README.TXT
 PHOTO001.JPG
@@ -160,17 +160,17 @@ CONFIG.INI
 LOG_2024.TXT
 ```
 
-### ❌ Invalid Filenames:
+###  Invalid Filenames:
 ```
-my-long-filename.txt  ❌ Too long
-file name.txt         ❌ Spaces not allowed
-document.docx         ❌ Extension too long
-verylongname.txt      ❌ Filename too long
+my-long-filename.txt   Too long
+file name.txt          Spaces not allowed
+document.docx          Extension too long
+verylongname.txt       Filename too long
 ```
 
 ---
 
-## 🔥 **Quick Start Template**
+##  **Quick Start Template**
 
 Add this to your `main()` function after the filesystem initialization:
 
@@ -204,12 +204,12 @@ for (path, content) in &files {
     }
 }
 
-info!("✅ Custom files created!");
+info!("Custom files created!");
 ```
 
 ---
 
-## 📊 **Example: Complete Custom Setup**
+##  **Example: Complete Custom Setup**
 
 Here's a complete example you can copy-paste into your `main()`:
 
@@ -257,12 +257,4 @@ Timestamp,Temperature,Humidity\n\
 
 fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/PROJECTS/DATA.CSV", data, high_capacity).ok();
 
-info!("✅ Personal workspace created!");
 ```
-
----
-
-## 🎨 **Interactive Example Code**
-
-I'll add a custom section to your main.rs where you can easily add files:
-

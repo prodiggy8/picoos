@@ -1,6 +1,6 @@
-# 🎉 Multi-Cluster Files + Directories Implementation Complete!
+#  Multi-Cluster Files + Directories Implementation Complete!
 
-## ✅ What Was Added
+##  What Was Added
 
 ### 1. **Multi-Cluster File Reading** (`fat32_read_file_complete`)
 - Reads files of ANY size by following FAT chain
@@ -28,7 +28,7 @@
 - `fat32_write_file_in_dir` - Write to specific directory
 - `fat32_list_directory` - List all entries in a directory
 
-## 🚀 How to Use
+## How to Use
 
 ### Create Directories
 ```rust
@@ -101,7 +101,7 @@ fat32_list_directory(
 )?;
 ```
 
-## 📝 Test Program Features
+##  Test Program Features
 
 The main() function now demonstrates:
 
@@ -124,7 +124,7 @@ The main() function now demonstrates:
    - Lists `/DOCS` directory
    - Shows file/directory types and sizes
 
-## 🧪 Running the Tests
+##  Running the Tests
 
 ```bash
 # Build
@@ -180,10 +180,10 @@ INFO    [FILE] GUIDE    TXT - 103 bytes, cluster 7
 INFO    [FILE] REPORT   TXT - 707 bytes, cluster 8
 INFO    [DIR ] REPORTS     - 0 bytes, cluster 4
 INFO  
-INFO  🎉 All filesystem tests complete!
+INFO  All filesystem tests complete!
 ```
 
-## 📂 Verify on PC
+##  Verify on PC
 
 After running, remove SD card and check on your computer:
 
@@ -199,32 +199,32 @@ After running, remove SD card and check on your computer:
 
 ## 🎯 What You Can Do Now
 
-✅ **Create complex directory structures**
-✅ **Write files anywhere in the tree**
-✅ **Read multi-cluster files**
-✅ **Navigate using paths**
-✅ **List directory contents**
+ **Create complex directory structures**
+ **Write files anywhere in the tree**
+ **Read multi-cluster files**
+ **Navigate using paths**
+ **List directory contents**
 
 ## 🔜 What's Still Missing (Future Work)
 
-- ❌ File deletion
-- ❌ Directory deletion
-- ❌ File renaming/moving
-- ❌ Sector caching (performance boost)
-- ❌ Long filename support (LFN)
-- ❌ File timestamps
-- ❌ File attributes (hidden, readonly, etc.)
-- ❌ Concurrent access/locking
-- ❌ Error recovery
+-  File deletion
+-  Directory deletion
+-  File renaming/moving
+-  Sector caching (performance boost)
+-  Long filename support (LFN)
+-  File timestamps
+-  File attributes (hidden, readonly, etc.)
+-  Concurrent access/locking
+-  Error recovery
 
-## 📊 Code Stats
+##  Code Stats
 
 - **New Functions:** 8
 - **Lines Added:** ~400
 - **Features:** Multi-cluster read, directories, path navigation
 - **Compatibility:** Maintains backward compatibility with existing code
 
-## 🚀 Next Recommended Steps
+## Next Recommended Steps
 
 1. **Add Caching** - 10-100x performance improvement
 2. **File Deletion** - Free up space
@@ -233,10 +233,10 @@ After running, remove SD card and check on your computer:
 
 ---
 
-**Congratulations!** 🎉 You now have a fully functional hierarchical filesystem with:
+**Congratulations!**  You now have a fully functional hierarchical filesystem with:
 - Multi-level directories
 - Path-based file operations  
 - Multi-cluster file support
 - Complete read/write capabilities
 
-Ready to integrate into your Pico OS! 🦀
+

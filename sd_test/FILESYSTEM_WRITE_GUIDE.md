@@ -40,11 +40,11 @@ match fat32_write_file(&mut spi, &mut cs, &fat_info, "TEST.TXT", data, high_capa
 
 ## Filename Format
 Files must use 8.3 format (max 8 chars for name, 3 for extension):
-- ✅ "HELLO.TXT"
-- ✅ "DATA.BIN"
-- ✅ "README" (no extension)
-- ❌ "VERYLONGNAME.TXT" (name too long)
-- ❌ "FILE.JSON" (extension too long)
+-  "HELLO.TXT"
+-  "DATA.BIN"
+-  "README" (no extension)
+-  "VERYLONGNAME.TXT" (name too long)
+-  "FILE.JSON" (extension too long)
 
 ## Current Limitations
 
@@ -133,7 +133,7 @@ Files must use 8.3 format (max 8 chars for name, 3 for extension):
 
 ## Safety Notes
 
-⚠️ **IMPORTANT**: 
+**IMPORTANT**: 
 - Always properly unmount/eject SD card before removing from Pico
 - Writing to FAT can corrupt the filesystem if interrupted
 - Test on a backup SD card first

@@ -1,12 +1,11 @@
-# ⚡ Super Simple: Add Your First File
+# Super Simple: Add Your First File
 
-## 🎯 3-Step Guide
+##  3-Step Guide
 
 ### **Step 1: Open `src/main.rs`**
 
 Look for **line 1218** - you'll see this comment:
 ```rust
-// 🎨 YOUR CUSTOM FILES - Add your own files and directories here!
 ```
 
 ### **Step 2: Uncomment the Example Code**
@@ -47,11 +46,10 @@ Just **delete** the `/*` at the start and `*/` at the end!
 ./flash.sh
 ```
 
-That's it! Your file `MYFILE.TXT` will be on the SD card! 🎉
 
 ---
 
-## 🔧 Add Your Own Custom File
+##  Add Your Own Custom File
 
 Replace the example with your own content:
 
@@ -68,7 +66,7 @@ match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/YOURNAME.TXT", my
 
 ---
 
-## 📂 Add a Directory Too
+##  Add a Directory Too
 
 ```rust
 info!("\n=== Creating Custom Files ===");
@@ -89,7 +87,7 @@ match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFOLDER/FILE.TXT
 
 ---
 
-## ✅ Verify It Worked
+##  Verify It Worked
 
 After running `./flash.sh`, check the serial output for:
 ```
@@ -97,11 +95,11 @@ INFO  === Creating Custom Files ===
 INFO  ✓ Created /MYFILE.TXT
 ```
 
-Then remove the SD card and check it on your computer - you'll see the files! 📁
+Then remove the SD card and check it on your computer - you'll see the files!
 
 ---
 
-## 🎨 More Examples
+##  More Examples
 
 **Create a log file:**
 ```rust
@@ -123,11 +121,10 @@ fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DATA.CSV", csv, high_ca
 
 ---
 
-## 💡 Remember
+##  Remember
 
 - **Filenames**: Max 8 characters + 3 for extension (e.g., `FILENAME.TXT`)
 - **Content**: Use `b"text"` for byte strings
 - **Path**: Start with `/` for root directory
 - **Subdirectories**: Create directory first, then files
 
-That's all you need to know! Happy coding! 🚀

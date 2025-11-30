@@ -1,4 +1,4 @@
-# 🎯 How to Run Your SD Card Filesystem
+# How to Run Your SD Card Filesystem
 
 ## The Simplest Way (Recommended)
 
@@ -97,7 +97,7 @@ cargo check
    Compiling sd_test v0.1.0
     Finished release [optimized + debuginfo] target(s)
      Running elf2uf2-rs -d target/thumbv6m-none-eabi/release/sd_test
-✅ Flash complete!
+ Flash complete!
 ```
 
 ### During Flash (Debug probe mode)
@@ -195,4 +195,4 @@ cargo run --release    # Flash and see live logs
 3. Follow the prompts
 4. Check SD card for HELLO.TXT
 
-That's it! 🎉
+

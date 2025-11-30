@@ -1,10 +1,10 @@
-# 🗑️ File Deletion Guide
+#  File Deletion Guide
 
 Your FAT32 filesystem now supports **file and directory deletion**! This guide shows you how to use the deletion features.
 
 ---
 
-## 🎯 **Available Deletion Functions**
+##  **Available Deletion Functions**
 
 ### **1. Delete a File (Path-Based)** ⭐ **EASIEST**
 
@@ -100,7 +100,7 @@ fat32_delete_directory(
 
 ---
 
-## 📋 **What Happens When You Delete?**
+##  **What Happens When You Delete?**
 
 ### **File Deletion Process:**
 
@@ -117,7 +117,7 @@ fat32_delete_directory(
 
 ---
 
-## ✅ **Complete Examples**
+##  **Complete Examples**
 
 ### **Example 1: Delete Temporary Files**
 
@@ -202,7 +202,7 @@ match fat32_verify_exists(&mut spi, &mut cs, &fat_info, file_to_delete, high_cap
 
 ---
 
-## 🚨 **Error Handling**
+##  **Error Handling**
 
 ### **Common Errors:**
 
@@ -213,25 +213,8 @@ match fat32_verify_exists(&mut spi, &mut cs, &fat_info, file_to_delete, high_cap
 | `"Cannot delete directory with delete_file"` | Used wrong function | Use `delete_directory` instead |
 | `"Not a directory"` | Trying to delete file as directory | Use `delete_file` instead |
 
----
 
-## 💡 **Best Practices**
-
-### ✅ **DO:**
-- Check if file exists before deleting
-- Verify deletion was successful
-- Delete all files before deleting a directory
-- Handle errors gracefully
-
-### ❌ **DON'T:**
-- Delete files you need!
-- Try to delete non-empty directories
-- Delete root directory
-- Delete while file is being read
-
----
-
-## 🎨 **Add to Your Custom Section**
+## **Add to Your Custom Section**
 
 Add this to the "YOUR CUSTOM FILES" section in `main.rs`:
 
@@ -340,14 +323,14 @@ FAT[12] = 0x00000000 (free)
 
 ---
 
-## 🎉 **What's New**
+##  **What's New**
 
 Your filesystem now has:
-- ✅ File deletion with cluster freeing
-- ✅ Directory deletion (empty only)
-- ✅ Path-based deletion
-- ✅ Proper error handling
-- ✅ FAT chain cleanup
+- File deletion with cluster freeing
+- Directory deletion (empty only)
+- Path-based deletion
+- Proper error handling
+- FAT chain cleanup
 
 ---
 
@@ -359,8 +342,4 @@ Want to add more features?
 - **File moving between directories**
 - **Trash/recycle bin** (mark as deleted but don't free clusters)
 
-Check `NEXT_STEPS_ROADMAP.md` for more ideas!
 
----
-
-Happy deleting! 🗑️✨

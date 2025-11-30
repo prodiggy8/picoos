@@ -1,4 +1,4 @@
-# 🚀 Quick Start Guide - SD Card Filesystem
+#  Quick Start Guide - SD Card Filesystem
 
 ## TL;DR - Fast Track
 
@@ -53,28 +53,17 @@ cargo install elf2uf2-rs --locked
 cargo install probe-rs --features cli
 ```
 
-## Hardware Setup Checklist
 
-- [ ] SD card formatted as FAT32
-- [ ] SD card module connected to Pico:
-  - VCC  → Pin 36 (3.3V) ⚠️ NOT 5V!
-  - GND  → Pin 38 (GND)
-  - SCK  → Pin 24 (GPIO 18)
-  - MOSI → Pin 25 (GPIO 19)
-  - MISO → Pin 21 (GPIO 16)
-  - CS   → Pin 22 (GPIO 17)
-- [ ] SD card inserted in module
-- [ ] Pico connected to computer via USB
 
 ## What to Expect
 
 After flashing, the Pico will:
-1. ✅ Initialize SD card
-2. ✅ Read and parse FAT32 boot sector
-3. ✅ List files in root directory
-4. ✅ Read any RUST.TXT file if present
-5. ✅ **Write a new file called HELLO.TXT**
-6. ✅ Verify the write by reading directory again
+1.  Initialize SD card
+2.  Read and parse FAT32 boot sector
+3.  List files in root directory
+4.  Read any RUST.TXT file if present
+5.  **Write a new file called HELLO.TXT**
+6.  Verify the write by reading directory again
 
 ## Verify It Worked
 
@@ -157,4 +146,3 @@ match fat32_write_file(&mut spi, &mut cs, &info, "MYFILE.TXT", test_data, high_c
 
 ---
 
-**Ready to go?** Run `./build.sh` and follow the prompts! 🎉
