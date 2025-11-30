@@ -261,4 +261,3 @@ cargo clippy
 | SD card not responding | Check voltage (must be 3.3V not 5V!) |
 | Corrupted filesystem | Reformat SD card, test with small file first |
 
-Happy hacking! 🚀
