@@ -7,29 +7,25 @@
 #![no_main]
 
 // ---- Boot2 for RP2040 (Stage 2 Bootloader) ----
-// This is the second-stage bootloader that runs when the RP2040 boots up.
-// It configures external flash memory before our main program runs.
-#[link_section = ".boot2"]  // Place this in the .boot2 section of binary
-#[no_mangle]                 // Don't change the symbol name during compilation
-#[used]                      // Force the compiler to include this even if it seems unused
-pub static BOOT2_FIRMWARE: [u8; 256] = rp2040_boot2::BOOT_LOADER_W25Q080;
+// Embassy handles the boot2 automatically through the "boot2-w25q080" feature
+// No need to manually define BOOT2_FIRMWARE when using Embassy
 
 // ---- Logging and Panic Handling ----
 use defmt::*;           // Efficient logging for embedded systems (smaller than println!)
 use defmt_rtt as _;     // Real-Time Transfer: sends logs over debug probe
 use panic_probe as _;   // What to do when program panics (crashes)
 
-// ---- Board Hardware Abstraction Layer (HAL) ----
-use rp_pico::entry;     // The #[entry] macro - marks our main() function
-use rp_pico::hal::{self as hal, pac, watchdog::Watchdog};
-use hal::sio::Sio;      // Single-cycle I/O for GPIO
-use hal::fugit::RateExtU32;  // Allows writing "400.kHz()" instead of raw numbers
-use hal::clocks::Clock; // Clock management
+// ---- Embassy Framework ----
+use embassy_executor::Spawner;
+use embassy_rp::{
+    gpio::{Level, Output},
+    spi::{Spi, Config as SpiConfig, Phase, Polarity},
+};
+use embassy_time::{Timer, Duration};
 
 // ---- embedded-hal Traits for Hardware Independence ----
-// These traits let us write code that works with any SPI/GPIO implementation
 use embedded_hal::digital::OutputPin;  // GPIO output operations (set high/low)
-use embedded_hal::spi::{SpiBus, MODE_0};  // SPI communication and clock mode
+use embedded_hal::spi::SpiBus;  // SPI communication and clock mode
 
 // ============================================================================
 // FAT32 FILESYSTEM DATA STRUCTURES
@@ -271,7 +267,7 @@ impl Fat32Info {
     /// Read a FAT entry to get the next cluster in the chain.
     /// Files can span multiple clusters; FAT is a linked list telling us which cluster comes next.
     /// Returns: next cluster number, or >= 0x0FFFFFF8 for end-of-chain, or 0 for free cluster
-    fn read_fat_entry<SPI, CS>(
+    async fn read_fat_entry<SPI, CS>(
         &self,
         spi: &mut SPI,
         cs: &mut CS,
@@ -293,7 +289,7 @@ impl Fat32Info {
 
         // Read the sector containing the FAT entry
         let mut buf = [0u8; 512];
-        sd_read_block(spi, cs, fat_sector, &mut buf, high_capacity)?;
+        sd_read_block(spi, cs, fat_sector, &mut buf, high_capacity).await?;
 
         // Extract the 4-byte FAT entry and mask off top 4 bits (reserved, not used)
         let entry = u32::from_le_bytes([
@@ -308,7 +304,7 @@ impl Fat32Info {
 
     /// Write a FAT entry to link clusters or mark end-of-chain.
     /// Updates ALL FAT copies (usually 2) to keep them synchronized.
-    fn write_fat_entry<SPI, CS>(
+    async fn write_fat_entry<SPI, CS>(
         &self,
         spi: &mut SPI,
         cs: &mut CS,
@@ -327,7 +323,7 @@ impl Fat32Info {
 
         // Read the sector first (we need to preserve other FAT entries in same sector)
         let mut buf = [0u8; 512];
-        sd_read_block(spi, cs, fat_sector, &mut buf, high_capacity)?;
+        sd_read_block(spi, cs, fat_sector, &mut buf, high_capacity).await?;
 
         // Preserve top 4 bits (reserved), write new value in lower 28 bits
         let old_value = u32::from_le_bytes([
@@ -349,7 +345,7 @@ impl Fat32Info {
         for fat_num in 0..self.num_fats {
             let sector = self.fat_start_lba + (fat_num as u32 * self.fat_size_sectors) 
                 + (fat_offset / self.bytes_per_sector as u32);
-            sd_write_block(spi, cs, sector, &buf, high_capacity)?;
+            sd_write_block(spi, cs, sector, &buf, high_capacity).await?;
         }
 
         Ok(())
@@ -357,7 +353,7 @@ impl Fat32Info {
 
     /// Find a free cluster by scanning the FAT for a zero entry.
     /// This is like malloc() for the filesystem - finds free space to allocate.
-    fn find_free_cluster<SPI, CS>(
+    async fn find_free_cluster<SPI, CS>(
         &self,
         spi: &mut SPI,
         cs: &mut CS,
@@ -377,7 +373,7 @@ impl Fat32Info {
                 continue; // Clusters 0 and 1 are reserved in FAT specification
             }
             
-            let entry = self.read_fat_entry(spi, cs, cluster, high_capacity)?;
+            let entry = self.read_fat_entry(spi, cs, cluster, high_capacity).await?;
             if entry == 0 {  // 0 means free cluster
                 return Ok(cluster);
             }
@@ -385,7 +381,7 @@ impl Fat32Info {
 
         // Wrap around and search from beginning if we didn't find one
         for cluster in 2..start_hint {
-            let entry = self.read_fat_entry(spi, cs, cluster, high_capacity)?;
+            let entry = self.read_fat_entry(spi, cs, cluster, high_capacity).await?;
             if entry == 0 {
                 return Ok(cluster);
             }
@@ -403,7 +399,7 @@ impl Fat32Info {
 
 /// Send and receive one byte over SPI (full-duplex communication).
 /// SPI is synchronous: we send a byte and simultaneously receive a byte.
-fn spi_txrx<SPI>(spi: &mut SPI, byte: u8) -> u8
+async fn spi_txrx<SPI>(spi: &mut SPI, byte: u8) -> u8
 where
     SPI: SpiBus<u8>,
 {
@@ -418,20 +414,20 @@ where
 
 /// End an SD command by deselecting the card (CS high) with proper timing.
 /// SD cards need clock cycles with CS high between commands.
-fn sd_end_cmd<SPI, CS>(spi: &mut SPI, cs: &mut CS)
+async fn sd_end_cmd<SPI, CS>(spi: &mut SPI, cs: &mut CS)
 where
     SPI: SpiBus<u8>,
     CS: OutputPin,
 {
-    let _ = spi_txrx(spi, 0xFF);  // Send one dummy byte for timing
-    let _ = cs.set_high();         // Deselect card (CS = high)
-    let _ = spi_txrx(spi, 0xFF);  // Send another byte (gives card time to finish)
+    let _ = spi_txrx(spi, 0xFF).await;  // Send one dummy byte for timing
+    let _ = cs.set_high();              // Deselect card (CS = high)
+    let _ = spi_txrx(spi, 0xFF).await;  // Send another byte (gives card time to finish)
 }
 
 /// Send a command to the SD card and wait for response.
 /// SD commands are 6 bytes: [cmd | arg3 | arg2 | arg1 | arg0 | crc]
 /// Returns the R1 response byte (status byte from card).
-fn sd_send_cmd<SPI, CS>(
+async fn sd_send_cmd<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     cmd: u8,      // Command number (0-63)
@@ -442,33 +438,33 @@ where
     SPI: SpiBus<u8>,
     CS: OutputPin,
 {
-    let _ = cs.set_low();           // Select card (CS = low)
-    let _ = spi_txrx(spi, 0xFF);    // Dummy byte for timing
+    let _ = cs.set_low();                          // Select card (CS = low)
+    let _ = spi_txrx(spi, 0xFF).await;             // Dummy byte for timing
 
     // Send 6-byte command packet
-    let _ = spi_txrx(spi, 0x40 | cmd);        // Command byte (always starts with 01xxxxxx)
-    let _ = spi_txrx(spi, (arg >> 24) as u8); // Argument byte 3 (MSB)
-    let _ = spi_txrx(spi, (arg >> 16) as u8); // Argument byte 2
-    let _ = spi_txrx(spi, (arg >> 8) as u8);  // Argument byte 1
-    let _ = spi_txrx(spi, arg as u8);         // Argument byte 0 (LSB)
-    let _ = spi_txrx(spi, crc);               // CRC byte
+    let _ = spi_txrx(spi, 0x40 | cmd).await;        // Command byte (always starts with 01xxxxxx)
+    let _ = spi_txrx(spi, (arg >> 24) as u8).await; // Argument byte 3 (MSB)
+    let _ = spi_txrx(spi, (arg >> 16) as u8).await; // Argument byte 2
+    let _ = spi_txrx(spi, (arg >> 8) as u8).await;  // Argument byte 1
+    let _ = spi_txrx(spi, arg as u8).await;         // Argument byte 0 (LSB)
+    let _ = spi_txrx(spi, crc).await;               // CRC byte
 
     // Wait for response (card sends 0xFF while processing, then response byte)
     // Response byte has MSB=0 (distinguishes from 0xFF idle bytes)
     for _ in 0..255 {
-        let resp = spi_txrx(spi, 0xFF);
+        let resp = spi_txrx(spi, 0xFF).await;
         if resp & 0x80 == 0 {  // MSB clear = valid response
             return Ok(resp);
         }
     }
 
-    sd_end_cmd(spi, cs);
+    sd_end_cmd(spi, cs).await;
     Err("CMD timeout")  // Card didn't respond in time
 }
 
 /// Initialize the SD card: reset it, check version, and activate.
 /// Returns: Ok(true) for high-capacity (SDHC/SDXC), Ok(false) for standard capacity.
-fn sd_init<SPI, CS>(spi: &mut SPI, cs: &mut CS) -> Result<bool, &'static str>
+async fn sd_init<SPI, CS>(spi: &mut SPI, cs: &mut CS) -> Result<bool, &'static str>
 where
     SPI: SpiBus<u8>,
     CS: OutputPin,
@@ -477,26 +473,26 @@ where
     info!("SD init: send ≥80 clocks with CS high");
     let _ = cs.set_high();
     for _ in 0..20 {  // 20 bytes × 8 bits = 160 clock pulses
-        let _ = spi_txrx(spi, 0xFF);
+        let _ = spi_txrx(spi, 0xFF).await;
     }
 
-    cortex_m::asm::delay(10_000);  // Wait for card to stabilize
+    Timer::after_millis(10).await;  // Wait for card to stabilize
 
     // Step 2: CMD0 - Reset card to idle state
     info!("SD init: CMD0");
     let mut r1 = 0xFF;
     for attempt in 0..10 {
-        r1 = sd_send_cmd(spi, cs, 0, 0, 0x95)?;  // CRC=0x95 is required for CMD0
-        sd_end_cmd(spi, cs);
+        r1 = sd_send_cmd(spi, cs, 0, 0, 0x95).await?;  // CRC=0x95 is required for CMD0
+        sd_end_cmd(spi, cs).await;
         info!("  CMD0 attempt {=u8}: r1 = {=u8:#04x}", attempt, r1);
         if r1 == 0x01 {  // 0x01 = "in idle state" (correct response)
             break;
         }
         // Add dummy bytes and delay between attempts
         for _ in 0..100 {
-            let _ = spi_txrx(spi, 0xFF);
+            let _ = spi_txrx(spi, 0xFF).await;
         }
-        cortex_m::asm::delay(100_000);
+        Timer::after_millis(100).await;
     }
 
     // Check if card responded
@@ -510,16 +506,16 @@ where
 
     // Step 3: CMD8 - Check card version and voltage range
     info!("SD init: CMD8");
-    let r1 = sd_send_cmd(spi, cs, 8, 0x0000_01AA, 0x87)?;  // 0x1AA = test pattern, CRC=0x87
+    let r1 = sd_send_cmd(spi, cs, 8, 0x0000_01AA, 0x87).await?;  // 0x1AA = test pattern, CRC=0x87
     let v2;  // Will be true for v2.0+ cards (SDHC/SDXC), false for v1.x
 
     if r1 == 0x01 {
         // Card supports CMD8 - it's a v2.0+ card
         let mut r7 = [0u8; 4];  // CMD8 returns R7 response (4 additional bytes)
         for b in r7.iter_mut() {
-            *b = spi_txrx(spi, 0xFF);
+            *b = spi_txrx(spi, 0xFF).await;
         }
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
 
         info!("  CMD8 R7: {=u8} {=u8} {=u8} {=u8}", r7[0], r7[1], r7[2], r7[3]);
         // Check if card echoed back our test pattern (0x01AA)
@@ -531,10 +527,10 @@ where
     } else if (r1 & 0x04) != 0 {
         // Card doesn't support CMD8 (illegal command bit set) - it's a v1.x card
         info!("CMD8 illegal -> old card (v1.x/MMC)");
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
         v2 = false;
     } else {
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
         return Err("CMD8 unexpected R1");
     }
 
@@ -543,16 +539,16 @@ where
     info!("SD init: ACMD41 loop");
     for _ in 0..1000 {
         // Send CMD55 (next command is an application-specific command)
-        let r1 = sd_send_cmd(spi, cs, 55, 0, 0x01)?;
-        sd_end_cmd(spi, cs);
+        let r1 = sd_send_cmd(spi, cs, 55, 0, 0x01).await?;
+        sd_end_cmd(spi, cs).await;
         if r1 > 0x01 {
             return Err("CMD55 failed");
         }
 
         // Send CMD41 with HCS bit (tells card we support high capacity)
         let arg = if v2 { 1u32 << 30 } else { 0 };  // Bit 30 = HCS (Host Capacity Support)
-        let r1 = sd_send_cmd(spi, cs, 41, arg, 0x01)?;
-        sd_end_cmd(spi, cs);
+        let r1 = sd_send_cmd(spi, cs, 41, arg, 0x01).await?;
+        sd_end_cmd(spi, cs).await;
 
         if r1 == 0x00 {  // 0x00 = card is ready (initialization complete)
             info!("  ACMD41: card ready");
@@ -566,17 +562,17 @@ where
     let mut high_capacity = false;
     if v2 {
         info!("SD init: CMD58");
-        let r1 = sd_send_cmd(spi, cs, 58, 0, 0x01)?;
+        let r1 = sd_send_cmd(spi, cs, 58, 0, 0x01).await?;
         if r1 != 0x00 {
-            sd_end_cmd(spi, cs);
+            sd_end_cmd(spi, cs).await;
             return Err("CMD58 failed");
         }
 
         let mut ocr = [0u8; 4];  // Read 32-bit OCR register
         for b in ocr.iter_mut() {
-            *b = spi_txrx(spi, 0xFF);
+            *b = spi_txrx(spi, 0xFF).await;
         }
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
 
         info!("  OCR: {=u8} {=u8} {=u8} {=u8}", ocr[0], ocr[1], ocr[2], ocr[3]);
         // Bit 30 of OCR = CCS (Card Capacity Status)
@@ -591,7 +587,7 @@ where
 
 /// Read a 512-byte block from the SD card.
 /// This is the fundamental read operation - all file reads use this.
-fn sd_read_block<SPI, CS>(
+async fn sd_read_block<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     lba: u32,              // Logical Block Address (sector number)
@@ -607,36 +603,36 @@ where
     info!("Read block: lba={=u32}, addr={=u32}", lba, addr);
 
     // CMD17: READ_SINGLE_BLOCK
-    let r1 = sd_send_cmd(spi, cs, 17, addr, 0x01)?;
+    let r1 = sd_send_cmd(spi, cs, 17, addr, 0x01).await?;
     if r1 != 0x00 {
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
         return Err("CMD17 bad R1");
     }
 
     // Wait for data token (0xFE) - card sends this when data is ready
     for _ in 0..10_000 {
-        let token = spi_txrx(spi, 0xFF);
+        let token = spi_txrx(spi, 0xFF).await;
         if token == 0xFE {  // 0xFE = start of data block
             // Read 512 bytes of data
             for i in 0..512 {
-                buf[i] = spi_txrx(spi, 0xFF);
+                buf[i] = spi_txrx(spi, 0xFF).await;
             }
             // Read 2-byte CRC (we ignore it in SPI mode, but must read it)
-            let _ = spi_txrx(spi, 0xFF);
-            let _ = spi_txrx(spi, 0xFF);
+            let _ = spi_txrx(spi, 0xFF).await;
+            let _ = spi_txrx(spi, 0xFF).await;
 
-            sd_end_cmd(spi, cs);
+            sd_end_cmd(spi, cs).await;
             return Ok(());
         }
     }
 
-    sd_end_cmd(spi, cs);
+    sd_end_cmd(spi, cs).await;
     Err("data token timeout")
 }
 
 /// Write a 512-byte block to the SD card.
 /// This is the fundamental write operation - all file writes use this.
-fn sd_write_block<SPI, CS>(
+async fn sd_write_block<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     lba: u32,              // Logical Block Address (sector number)
@@ -652,42 +648,42 @@ where
     info!("Write block: lba={=u32}, addr={=u32}", lba, addr);
 
     // CMD24: WRITE_SINGLE_BLOCK
-    let r1 = sd_send_cmd(spi, cs, 24, addr, 0x01)?;
+    let r1 = sd_send_cmd(spi, cs, 24, addr, 0x01).await?;
     if r1 != 0x00 {
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
         return Err("CMD24 bad R1");
     }
 
     // Send start token (0xFE) - tells card "data is coming now"
-    let _ = spi_txrx(spi, 0xFE);
+    let _ = spi_txrx(spi, 0xFE).await;
 
     // Send 512 bytes of data
     for i in 0..512 {
-        let _ = spi_txrx(spi, buf[i]);
+        let _ = spi_txrx(spi, buf[i]).await;
     }
 
     // Send dummy CRC (2 bytes) - not checked in SPI mode, but required by protocol
-    let _ = spi_txrx(spi, 0xFF);
-    let _ = spi_txrx(spi, 0xFF);
+    let _ = spi_txrx(spi, 0xFF).await;
+    let _ = spi_txrx(spi, 0xFF).await;
 
     // Wait for data response token from card
-    let response = spi_txrx(spi, 0xFF);
+    let response = spi_txrx(spi, 0xFF).await;
     // Bits 0-4 of response: xxx0101 = data accepted
     if (response & 0x1F) != 0x05 {
-        sd_end_cmd(spi, cs);
+        sd_end_cmd(spi, cs).await;
         return Err("Write data rejected");
     }
 
     // Wait for card to finish writing (card holds DO low while busy)
     for _ in 0..100_000 {
-        let status = spi_txrx(spi, 0xFF);
+        let status = spi_txrx(spi, 0xFF).await;
         if status == 0xFF {  // 0xFF = card is no longer busy
-            sd_end_cmd(spi, cs);
+            sd_end_cmd(spi, cs).await;
             return Ok(());
         }
     }
 
-    sd_end_cmd(spi, cs);
+    sd_end_cmd(spi, cs).await;
     Err("Write busy timeout")
 }
 
@@ -703,7 +699,7 @@ where
 
 /// Write a file to the root directory (legacy function for compatibility).
 /// Modern code should use fat32_write_file_at_path() which supports subdirectories.
-fn fat32_write_file<SPI, CS>(
+async fn fat32_write_file<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -716,13 +712,13 @@ where
     CS: OutputPin,
 {
     // Delegate to the directory-based version, using root directory
-    fat32_write_file_in_dir(spi, cs, fat_info, fat_info.root_dir_cluster, filename, data, high_capacity)
+    fat32_write_file_in_dir(spi, cs, fat_info, fat_info.root_dir_cluster, filename, data, high_capacity).await
 }
 
 /// Find a file in a directory by name and return its directory entry.
 /// This searches only the first sector of the directory (simple implementation).
 /// A full implementation would scan all sectors/clusters of the directory.
-fn fat32_find_file<SPI, CS>(
+async fn fat32_find_file<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -740,7 +736,7 @@ where
     // Read first sector of directory
     let dir_lba = fat_info.cluster_to_lba(dir_cluster);
     let mut buf = [0u8; 512];
-    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity).await?;
     
     // Scan directory entries (16 entries per sector: 512 bytes / 32 bytes per entry)
     for entry_idx in 0..16 {
@@ -762,7 +758,7 @@ where
 }
 
 /// Create a new directory
-fn fat32_create_directory<SPI, CS>(
+async fn fat32_create_directory<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -777,11 +773,11 @@ where
     info!("Creating directory: {}", dirname);
     
     // Allocate a cluster for the new directory
-    let dir_cluster = fat_info.find_free_cluster(spi, cs, 2, high_capacity)?;
+    let dir_cluster = fat_info.find_free_cluster(spi, cs, 2, high_capacity).await?;
     info!("  Allocated cluster {=u32} for directory", dir_cluster);
     
     // Mark cluster as end-of-chain in FAT
-    fat_info.write_fat_entry(spi, cs, dir_cluster, 0x0FFF_FFFF, high_capacity)?;
+    fat_info.write_fat_entry(spi, cs, dir_cluster, 0x0FFF_FFFF, high_capacity).await?;
     
     // Initialize directory cluster with . and .. entries
     let mut dir_buf = [0u8; 512];
@@ -806,21 +802,21 @@ where
     
     // Write directory cluster
     let dir_lba = fat_info.cluster_to_lba(dir_cluster);
-    sd_write_block(spi, cs, dir_lba, &dir_buf, high_capacity)?;
+    sd_write_block(spi, cs, dir_lba, &dir_buf, high_capacity).await?;
     
     // Add directory entry to parent directory
     let mut dir_entry = DirEntry::new(dirname, 0x10)?;  // 0x10 = directory attribute
     dir_entry.start_cluster = dir_cluster;
     dir_entry.size = 0;  // Directories have 0 size in FAT32
     
-    fat32_add_dir_entry(spi, cs, fat_info, parent_cluster, &dir_entry, high_capacity)?;
+    fat32_add_dir_entry(spi, cs, fat_info, parent_cluster, &dir_entry, high_capacity).await?;
     
     info!("Directory created successfully");
     Ok(dir_cluster)
 }
 
 /// Add a directory entry to any directory (not just root)
-fn fat32_add_dir_entry<SPI, CS>(
+async fn fat32_add_dir_entry<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -838,7 +834,7 @@ where
     // Search for a free slot in the directory
     // For simplicity, we'll just scan the first sector
     // A full implementation would scan multiple sectors/clusters
-    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity).await?;
     
     // Find first free entry (starts with 0x00 or 0xE5)
     let mut found_slot = None;
@@ -856,7 +852,7 @@ where
         Some(offset) => {
             // Write the directory entry
             entry.encode(&mut buf[offset..offset + 32]);
-            sd_write_block(spi, cs, dir_lba, &buf, high_capacity)?;
+            sd_write_block(spi, cs, dir_lba, &buf, high_capacity).await?;
             info!("Directory entry added at offset {=usize}", offset);
             Ok(())
         }
@@ -865,7 +861,7 @@ where
 }
 
 /// List all entries in a directory
-fn fat32_list_directory<SPI, CS>(
+async fn fat32_list_directory<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -880,7 +876,7 @@ where
     
     let dir_lba = fat_info.cluster_to_lba(dir_cluster);
     let mut buf = [0u8; 512];
-    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity).await?;
     
     for entry_idx in 0..16 {
         let offset = entry_idx * 32;
@@ -907,7 +903,7 @@ where
 }
 
 /// Parse a path and navigate to the target directory
-fn fat32_navigate_path<'a, SPI, CS>(
+async fn fat32_navigate_path<'a, SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -948,7 +944,7 @@ where
         };
         
         // Navigate to this directory
-        if let Some(entry) = fat32_find_file(spi, cs, fat_info, current_cluster, component, high_capacity)? {
+        if let Some(entry) = fat32_find_file(spi, cs, fat_info, current_cluster, component, high_capacity).await? {
             if (entry.attr & 0x10) == 0 {
                 return Err("Path component is not a directory");
             }
@@ -964,7 +960,7 @@ where
 }
 
 /// Write a file at a specific path (creates parent directories if needed)
-fn fat32_write_file_at_path<SPI, CS>(
+async fn fat32_write_file_at_path<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -979,12 +975,12 @@ where
     info!("Writing file at path: {}", path);
     
     // Navigate to parent directory and get filename
-    let (parent_cluster, filename) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity)?;
+    let (parent_cluster, filename) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity).await?;
     
     let filename = filename.ok_or("Path is a directory, not a file")?;
     
     // Write the file in the parent directory
-    fat32_write_file_in_dir(spi, cs, fat_info, parent_cluster, filename, data, high_capacity)?;
+    fat32_write_file_in_dir(spi, cs, fat_info, parent_cluster, filename, data, high_capacity).await?;
     
     Ok(())
 }
@@ -995,7 +991,7 @@ where
 /// - Writing data to those clusters
 /// - Creating a directory entry
 /// - Updating the FAT to link clusters together
-fn fat32_write_file_in_dir<SPI, CS>(
+async fn fat32_write_file_in_dir<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1030,7 +1026,7 @@ where
         dir_entry.start_cluster = 0;
     } else {
         // Allocate first cluster
-        let first_cluster = fat_info.find_free_cluster(spi, cs, 2, high_capacity)?;
+        let first_cluster = fat_info.find_free_cluster(spi, cs, 2, high_capacity).await?;
         dir_entry.start_cluster = first_cluster;
         info!("  First cluster: {=u32}", first_cluster);
 
@@ -1041,13 +1037,13 @@ where
         for cluster_idx in 0..clusters_needed {
             // Allocate next cluster if needed (or mark end-of-chain for last cluster)
             let next_cluster = if cluster_idx + 1 < clusters_needed {
-                fat_info.find_free_cluster(spi, cs, current_cluster + 1, high_capacity)?
+                fat_info.find_free_cluster(spi, cs, current_cluster + 1, high_capacity).await?
             } else {
                 0x0FFF_FFFF // End of chain marker
             };
 
             // Update FAT to link current cluster to next (or mark end-of-chain)
-            fat_info.write_fat_entry(spi, cs, current_cluster, next_cluster, high_capacity)?;
+            fat_info.write_fat_entry(spi, cs, current_cluster, next_cluster, high_capacity).await?;
 
             // Write data to all sectors in this cluster
             let cluster_lba = fat_info.cluster_to_lba(current_cluster);
@@ -1063,7 +1059,7 @@ where
                 }
                 
                 // Write sector to SD card
-                sd_write_block(spi, cs, cluster_lba + sector_idx as u32, &sector_buf, high_capacity)?;
+                sd_write_block(spi, cs, cluster_lba + sector_idx as u32, &sector_buf, high_capacity).await?;
                 bytes_written += bytes_to_copy;
                 
                 if bytes_written >= data.len() {
@@ -1081,14 +1077,14 @@ where
     }
 
     // Add directory entry to the parent directory
-    fat32_add_dir_entry(spi, cs, fat_info, dir_cluster, &dir_entry, high_capacity)?;
+    fat32_add_dir_entry(spi, cs, fat_info, dir_cluster, &dir_entry, high_capacity).await?;
 
     info!("File written successfully!");
     Ok(())
 }
 
 /// Read a file from a specific path
-fn fat32_read_file_at_path<SPI, CS>(
+async fn fat32_read_file_at_path<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1103,12 +1099,12 @@ where
     info!("Reading file at path: {}", path);
     
     // Navigate to parent directory and get filename
-    let (parent_cluster, filename) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity)?;
+    let (parent_cluster, filename) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity).await?;
     
     let filename = filename.ok_or("Path is a directory, not a file")?;
     
     // Find the file
-    let entry = fat32_find_file(spi, cs, fat_info, parent_cluster, filename, high_capacity)?
+    let entry = fat32_find_file(spi, cs, fat_info, parent_cluster, filename, high_capacity).await?
         .ok_or("File not found")?;
     
     // Make sure it's a file, not a directory
@@ -1117,11 +1113,11 @@ where
     }
     
     // Read the file
-    fat32_read_file_complete(spi, cs, fat_info, entry.start_cluster, entry.size, buffer, high_capacity)
+    fat32_read_file_complete(spi, cs, fat_info, entry.start_cluster, entry.size, buffer, high_capacity).await
 }
 
 /// Read a complete file by following the FAT chain
-fn fat32_read_file_complete<SPI, CS>(
+async fn fat32_read_file_complete<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1151,7 +1147,7 @@ where
         
         for sector_idx in 0..fat_info.sectors_per_cluster {
             let mut sector_buf = [0u8; 512];
-            sd_read_block(spi, cs, cluster_lba + sector_idx as u32, &mut sector_buf, high_capacity)?;
+            sd_read_block(spi, cs, cluster_lba + sector_idx as u32, &mut sector_buf, high_capacity).await?;
             
             // Copy data to output buffer
             let bytes_to_copy = ((file_size as usize - bytes_read).min(512)).min(buffer.len() - bytes_read);
@@ -1166,7 +1162,7 @@ where
         }
         
         // Get next cluster from FAT
-        let next_cluster = fat_info.read_fat_entry(spi, cs, current_cluster, high_capacity)?;
+        let next_cluster = fat_info.read_fat_entry(spi, cs, current_cluster, high_capacity).await?;
         
         // Check for end of chain
         if next_cluster >= 0x0FFF_FFF8 {
@@ -1178,7 +1174,7 @@ where
 }
 
 /// Delete a file by freeing its clusters and marking directory entry as deleted
-fn fat32_delete_file<SPI, CS>(
+async fn fat32_delete_file<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1196,7 +1192,7 @@ where
     let search_entry = DirEntry::new(filename, 0)?;
     let dir_lba = fat_info.cluster_to_lba(dir_cluster);
     let mut buf = [0u8; 512];
-    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity).await?;
     
     let mut entry_offset = None;
     let mut file_entry = None;
@@ -1228,10 +1224,10 @@ where
         
         loop {
             // Read next cluster before we free current one
-            let next_cluster = fat_info.read_fat_entry(spi, cs, current_cluster, high_capacity)?;
+            let next_cluster = fat_info.read_fat_entry(spi, cs, current_cluster, high_capacity).await?;
             
             // Mark cluster as free (0x00000000)
-            fat_info.write_fat_entry(spi, cs, current_cluster, 0x0000_0000, high_capacity)?;
+            fat_info.write_fat_entry(spi, cs, current_cluster, 0x0000_0000, high_capacity).await?;
             clusters_freed += 1;
             
             // Check if we've reached end of chain
@@ -1247,14 +1243,14 @@ where
     
     // Mark directory entry as deleted (first byte = 0xE5)
     buf[entry_offset] = 0xE5;
-    sd_write_block(spi, cs, dir_lba, &buf, high_capacity)?;
+    sd_write_block(spi, cs, dir_lba, &buf, high_capacity).await?;
     
     info!("File deleted successfully");
     Ok(())
 }
 
 /// Delete a file at a specific path
-fn fat32_delete_file_at_path<SPI, CS>(
+async fn fat32_delete_file_at_path<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1268,15 +1264,15 @@ where
     info!("Deleting file at path: {}", path);
     
     // Navigate to parent directory and get filename
-    let (parent_cluster, filename) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity)?;
+    let (parent_cluster, filename) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity).await?;
     let filename = filename.ok_or("Path is root directory, not a file")?;
     
     // Delete the file
-    fat32_delete_file(spi, cs, fat_info, parent_cluster, filename, high_capacity)
+    fat32_delete_file(spi, cs, fat_info, parent_cluster, filename, high_capacity).await
 }
 
 /// Delete an empty directory
-fn fat32_delete_directory<SPI, CS>(
+async fn fat32_delete_directory<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1291,7 +1287,7 @@ where
     info!("Deleting directory: {}", dirname);
     
     // Find the directory entry
-    let dir_entry = fat32_find_file(spi, cs, fat_info, parent_cluster, dirname, high_capacity)?
+    let dir_entry = fat32_find_file(spi, cs, fat_info, parent_cluster, dirname, high_capacity).await?
         .ok_or("Directory not found")?;
     
     // Verify it's a directory
@@ -1302,7 +1298,7 @@ where
     // Check if directory is empty (only . and .. entries)
     let dir_lba = fat_info.cluster_to_lba(dir_entry.start_cluster);
     let mut buf = [0u8; 512];
-    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity).await?;
     
     let mut entry_count = 0;
     for entry_idx in 0..16 {
@@ -1324,11 +1320,11 @@ where
     }
     
     // Free the directory's cluster
-    fat_info.write_fat_entry(spi, cs, dir_entry.start_cluster, 0x0000_0000, high_capacity)?;
+    fat_info.write_fat_entry(spi, cs, dir_entry.start_cluster, 0x0000_0000, high_capacity).await?;
     
     // Remove directory entry from parent
     let parent_lba = fat_info.cluster_to_lba(parent_cluster);
-    sd_read_block(spi, cs, parent_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, parent_lba, &mut buf, high_capacity).await?;
     
     // Find and mark the directory entry as deleted
     let search_entry = DirEntry::new(dirname, 0x10)?;
@@ -1337,7 +1333,7 @@ where
         if let Some(entry) = DirEntry::parse(&buf[offset..offset + 32]) {
             if entry.name == search_entry.name {
                 buf[offset] = 0xE5; // Mark as deleted
-                sd_write_block(spi, cs, parent_lba, &buf, high_capacity)?;
+                sd_write_block(spi, cs, parent_lba, &buf, high_capacity).await?;
                 info!("Directory deleted successfully");
                 return Ok(());
             }
@@ -1348,7 +1344,7 @@ where
 }
 
 /// Delete a directory at a specific path (must be empty)
-fn fat32_delete_directory_at_path<SPI, CS>(
+async fn fat32_delete_directory_at_path<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1362,15 +1358,15 @@ where
     info!("Deleting directory at path: {}", path);
     
     // Navigate to parent directory and get directory name
-    let (parent_cluster, dirname) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity)?;
+    let (parent_cluster, dirname) = fat32_navigate_path(spi, cs, fat_info, path, high_capacity).await?;
     let dirname = dirname.ok_or("Cannot delete root directory")?;
     
     // Delete the directory
-    fat32_delete_directory(spi, cs, fat_info, parent_cluster, dirname, high_capacity)
+    fat32_delete_directory(spi, cs, fat_info, parent_cluster, dirname, high_capacity).await
 }
 
 /// Rename a file in the same directory
-fn fat32_rename_file<SPI, CS>(
+async fn fat32_rename_file<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1386,7 +1382,7 @@ where
     info!("Renaming file: {} -> {} in directory cluster {=u32}", old_name, new_name, dir_cluster);
     
     // Check if new name already exists
-    if let Some(_) = fat32_find_file(spi, cs, fat_info, dir_cluster, new_name, high_capacity)? {
+    if let Some(_) = fat32_find_file(spi, cs, fat_info, dir_cluster, new_name, high_capacity).await? {
         return Err("File with new name already exists");
     }
     
@@ -1394,7 +1390,7 @@ where
     let search_entry = DirEntry::new(old_name, 0)?;
     let dir_lba = fat_info.cluster_to_lba(dir_cluster);
     let mut buf = [0u8; 512];
-    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, dir_lba, &mut buf, high_capacity).await?;
     
     // Find the entry to rename
     for entry_idx in 0..16 {
@@ -1409,7 +1405,7 @@ where
                 
                 // Write back the modified entry
                 entry.encode(&mut buf[offset..offset + 32]);
-                sd_write_block(spi, cs, dir_lba, &buf, high_capacity)?;
+                sd_write_block(spi, cs, dir_lba, &buf, high_capacity).await?;
                 
                 info!("File renamed successfully");
                 return Ok(());
@@ -1426,7 +1422,7 @@ where
 }
 
 /// Rename a file at a specific path
-fn fat32_rename_file_at_path<SPI, CS>(
+async fn fat32_rename_file_at_path<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1441,15 +1437,15 @@ where
     info!("Renaming file at path: {} -> {}", old_path, new_name);
     
     // Navigate to parent directory and get old filename
-    let (parent_cluster, old_filename) = fat32_navigate_path(spi, cs, fat_info, old_path, high_capacity)?;
+    let (parent_cluster, old_filename) = fat32_navigate_path(spi, cs, fat_info, old_path, high_capacity).await?;
     let old_filename = old_filename.ok_or("Path is root directory, not a file")?;
     
     // Rename the file in its current directory
-    fat32_rename_file(spi, cs, fat_info, parent_cluster, old_filename, new_name, high_capacity)
+    fat32_rename_file(spi, cs, fat_info, parent_cluster, old_filename, new_name, high_capacity).await
 }
 
 /// Move a file from one directory to another
-fn fat32_move_file<SPI, CS>(
+async fn fat32_move_file<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1464,19 +1460,19 @@ where
     info!("Moving file: {} -> {}", src_path, dest_path);
     
     // Navigate to source parent and get filename
-    let (src_parent_cluster, src_filename) = fat32_navigate_path(spi, cs, fat_info, src_path, high_capacity)?;
+    let (src_parent_cluster, src_filename) = fat32_navigate_path(spi, cs, fat_info, src_path, high_capacity).await?;
     let src_filename = src_filename.ok_or("Source path is a directory, not a file")?;
     
     // Navigate to destination parent and get new filename
-    let (dest_parent_cluster, dest_filename) = fat32_navigate_path(spi, cs, fat_info, dest_path, high_capacity)?;
+    let (dest_parent_cluster, dest_filename) = fat32_navigate_path(spi, cs, fat_info, dest_path, high_capacity).await?;
     let dest_filename = dest_filename.ok_or("Destination path is a directory, not a file")?;
     
     // Find the source file entry
-    let src_entry = fat32_find_file(spi, cs, fat_info, src_parent_cluster, src_filename, high_capacity)?
+    let src_entry = fat32_find_file(spi, cs, fat_info, src_parent_cluster, src_filename, high_capacity).await?
         .ok_or("Source file not found")?;
     
     // Check if destination file already exists
-    if let Some(_) = fat32_find_file(spi, cs, fat_info, dest_parent_cluster, dest_filename, high_capacity)? {
+    if let Some(_) = fat32_find_file(spi, cs, fat_info, dest_parent_cluster, dest_filename, high_capacity).await? {
         return Err("Destination file already exists");
     }
     
@@ -1486,12 +1482,12 @@ where
     new_entry.size = src_entry.size;
     
     // Add entry to destination directory
-    fat32_add_dir_entry(spi, cs, fat_info, dest_parent_cluster, &new_entry, high_capacity)?;
+    fat32_add_dir_entry(spi, cs, fat_info, dest_parent_cluster, &new_entry, high_capacity).await?;
     
     // Remove entry from source directory (mark as deleted)
     let src_lba = fat_info.cluster_to_lba(src_parent_cluster);
     let mut buf = [0u8; 512];
-    sd_read_block(spi, cs, src_lba, &mut buf, high_capacity)?;
+    sd_read_block(spi, cs, src_lba, &mut buf, high_capacity).await?;
     
     let search_entry = DirEntry::new(src_filename, 0)?;
     for entry_idx in 0..16 {
@@ -1499,7 +1495,7 @@ where
         if let Some(entry) = DirEntry::parse(&buf[offset..offset + 32]) {
             if entry.name == search_entry.name {
                 buf[offset] = 0xE5; // Mark as deleted
-                sd_write_block(spi, cs, src_lba, &buf, high_capacity)?;
+                sd_write_block(spi, cs, src_lba, &buf, high_capacity).await?;
                 info!("File moved successfully");
                 return Ok(());
             }
@@ -1510,7 +1506,7 @@ where
 }
 
 /// Verify that a file or directory exists at the given path
-fn fat32_verify_exists<SPI, CS>(
+async fn fat32_verify_exists<SPI, CS>(
     spi: &mut SPI,
     cs: &mut CS,
     fat_info: &Fat32Info,
@@ -1521,10 +1517,10 @@ where
     SPI: SpiBus<u8>,
     CS: OutputPin,
 {
-    match fat32_navigate_path(spi, cs, fat_info, path, high_capacity) {
+    match fat32_navigate_path(spi, cs, fat_info, path, high_capacity).await {
         Ok((parent_cluster, Some(filename))) => {
             // It's a file or directory - check if it exists
-            match fat32_find_file(spi, cs, fat_info, parent_cluster, filename, high_capacity)? {
+            match fat32_find_file(spi, cs, fat_info, parent_cluster, filename, high_capacity).await? {
                 Some(_) => Ok(true),
                 None => Ok(false),
             }
@@ -1537,63 +1533,40 @@ where
     }
 }
 
-/// Main entry point for the embedded program.
-/// The #[entry] attribute marks this as the entry point (replaces standard main()).
-/// The ! return type means this function never returns (embedded systems run forever).
-#[entry]
-fn main() -> ! {
-    info!("sd_test: Advanced Filesystem Test");
+/// Main entry point for Embassy executor
+#[embassy_executor::main]
+async fn main(_spawner: Spawner) {
+    info!("sd_test: Advanced Filesystem Test with Embassy");
 
     // ========================================================================
-    // HARDWARE INITIALIZATION
+    // EMBASSY HARDWARE INITIALIZATION
     // ========================================================================
     
-    // Take ownership of peripheral singletons (can only be done once)
-    let mut pac = pac::Peripherals::take().unwrap();
-    let _core = pac::CorePeripherals::take().unwrap();
-    let mut watchdog = Watchdog::new(pac.WATCHDOG);
-
-    // Initialize clocks and PLLs (Phase-Locked Loops) to run at proper speed
-    // XOSC = external oscillator crystal (12 MHz on Pico)
-    let clocks = hal::clocks::init_clocks_and_plls(
-        rp_pico::XOSC_CRYSTAL_FREQ,
-        pac.XOSC,
-        pac.CLOCKS,
-        pac.PLL_SYS,
-        pac.PLL_USB,
-        &mut pac.RESETS,
-        &mut watchdog,
-    )
-    .ok()
-    .unwrap();
+    // Initialize Embassy peripherals (this replaces HAL initialization)
+    let p = embassy_rp::init(Default::default());
 
     // ========================================================================
-    // GPIO AND SPI SETUP FOR SD CARD
+    // GPIO AND SPI SETUP FOR SD CARD (Embassy version)
     // ========================================================================
     
-    // Setup GPIO pins through Single-cycle I/O block
-    let sio = Sio::new(pac.SIO);
-    let pins = rp_pico::Pins::new(
-        pac.IO_BANK0,
-        pac.PADS_BANK0,
-        sio.gpio_bank0,
-        &mut pac.RESETS,
-    );
+    // Configure CS pin as output (manual control)
+    let mut cs = Output::new(p.PIN_17, Level::High);  // Start with CS high (deselected)
 
-    // Configure SPI pins (using SPI0 peripheral on Pico)
-    let sck = pins.gpio18.into_function::<hal::gpio::FunctionSpi>();   // Clock
-    let mosi = pins.gpio19.into_function::<hal::gpio::FunctionSpi>();  // Master Out Slave In
-    let miso = pins.gpio16.into_function::<hal::gpio::FunctionSpi>();  // Master In Slave Out
-    let mut cs = pins.gpio17.into_push_pull_output();                  // Chip Select (manual control)
-    cs.set_high().ok();  // Start with CS high (deselected)
+    // Configure SPI with Embassy
+    let mut spi_config = SpiConfig::default();
+    spi_config.frequency = 400_000;  // 400 kHz for SD card initialization
+    spi_config.phase = Phase::CaptureOnFirstTransition;
+    spi_config.polarity = Polarity::IdleLow;
 
-    // Initialize SPI peripheral at 400 kHz (slow for initialization)
-    // MODE_0: CPOL=0, CPHA=0 (clock idles low, data sampled on rising edge)
-    let mut spi = hal::spi::Spi::<_, _, _, 8>::new(pac.SPI0, (mosi, miso, sck)).init(
-        &mut pac.RESETS,
-        clocks.peripheral_clock.freq(),
-        400.kHz(),  // 400 kHz is safe for SD card initialization
-        MODE_0,
+    // Initialize SPI0 with Embassy
+    let mut spi = Spi::new(
+        p.SPI0,
+        p.PIN_18,  // CLK
+        p.PIN_19,  // MOSI
+        p.PIN_16,  // MISO
+        p.DMA_CH0,
+        p.DMA_CH1,
+        spi_config,
     );
 
     // ========================================================================
@@ -1601,11 +1574,13 @@ fn main() -> ! {
     // ========================================================================
     
     info!("Initializing SD card...");
-    let high_capacity = match sd_init(&mut spi, &mut cs) {
+    let high_capacity = match sd_init(&mut spi, &mut cs).await {
         Ok(hc) => hc,
         Err(e) => {
             error!("SD init failed: {}", e);
-            loop { cortex_m::asm::bkpt(); }  // Breakpoint for debugging
+            loop { 
+                Timer::after(Duration::from_millis(1000)).await;
+            }  // Embassy async wait instead of blocking
         }
     };
 
@@ -1615,7 +1590,7 @@ fn main() -> ! {
     
     // Read boot sector (sector 0) to get filesystem metadata
     let mut buf = [0u8; 512];
-    sd_read_block(&mut spi, &mut cs, 0, &mut buf, high_capacity).ok();
+    sd_read_block(&mut spi, &mut cs, 0, &mut buf, high_capacity).await.ok();
     
     // Parse FAT32 information from boot sector
     let fat_info = match Fat32Info::parse(&buf) {
@@ -1637,12 +1612,12 @@ fn main() -> ! {
     // ========================================================================
     info!("\n=== TEST 1: Creating Directory Structure ===");
     
-    match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity) {
+    match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity).await {
         Ok(docs_cluster) => {
             info!("✓ Created /DOCS directory");
             
             // Create a subdirectory
-            match fat32_create_directory(&mut spi, &mut cs, &fat_info, docs_cluster, "REPORTS", high_capacity) {
+            match fat32_create_directory(&mut spi, &mut cs, &fat_info, docs_cluster, "REPORTS", high_capacity).await {
                 Ok(_) => info!("✓ Created /DOCS/REPORTS subdirectory"),
                 Err(e) => error!("✗ Failed to create subdirectory: {}", e),
             }
@@ -1650,7 +1625,7 @@ fn main() -> ! {
         Err(e) => error!("✗ Failed to create directory: {}", e),
     }
 
-    match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "MUSIC", high_capacity) {
+    match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "MUSIC", high_capacity).await {
         Ok(_) => info!("✓ Created /MUSIC directory"),
         Err(e) => error!("✗ Failed: {}", e),
     }
@@ -1661,13 +1636,13 @@ fn main() -> ! {
     info!("\n=== TEST 2: Writing Files to Directories ===");
     
     let readme_data = b"Welcome to Pico OS Filesystem!\n\nThis filesystem supports:\n- Multi-cluster files\n- Subdirectories\n- Path navigation\n\nBuilt with Rust!";
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", readme_data, high_capacity) {
+    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", readme_data, high_capacity).await {
         Ok(()) => info!("✓ Wrote /README.TXT ({} bytes)", readme_data.len()),
         Err(e) => error!("✗ Failed: {}", e),
     }
 
     let doc_data = b"Project Documentation\n\nVersion 1.0\nDate: 2025-11-29\n\nThis is a test document in the DOCS folder.";
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/GUIDE.TXT", doc_data, high_capacity) {
+    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/GUIDE.TXT", doc_data, high_capacity).await {
         Ok(()) => info!("✓ Wrote /DOCS/GUIDE.TXT ({} bytes)", doc_data.len()),
         Err(e) => error!("✗ Failed: {}", e),
     }
@@ -1684,13 +1659,13 @@ fn main() -> ! {
         architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur \
         aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.";
     
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", large_data, high_capacity) {
+    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", large_data, high_capacity).await {
         Ok(()) => info!("✓ Wrote /DOCS/REPORT.TXT ({} bytes, multi-cluster)", large_data.len()),
         Err(e) => error!("✗ Failed: {}", e),
     }
 
     // ========================================================================
-    // 🎨 YOUR CUSTOM FILES - Add your own files and directories here!
+    // YOUR CUSTOM FILES - Add your own files and directories here!
     // ========================================================================
     // Uncomment and edit the examples below to create your own files:
     
@@ -1699,20 +1674,20 @@ fn main() -> ! {
     
     // Example 1: Create a simple text file
     let my_data = b"Hello! This is my custom file.";
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", my_data, high_capacity) {
+    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", my_data, high_capacity).await {
         Ok(()) => info!("✓ Created /MYFILE.TXT"),
         Err(e) => error!("✗ Failed: {}", e),
     }
     
     // Example 2: Create a new directory
-    match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "PHOTOS", high_capacity) {
+    match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "PHOTOS", high_capacity).await {
         Ok(_) => info!("✓ Created /PHOTOS directory"),
         Err(e) => error!("✗ Failed: {}", e),
     }
     
     // Example 3: Create a file in a subdirectory
     let photo_info = b"Photo Information\nDate: 2025-11-29\nCamera: Pico";
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS/INFO.TXT", photo_info, high_capacity) {
+    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS/INFO.TXT", photo_info, high_capacity).await {
         Ok(()) => info!("✓ Created /PHOTOS/INFO.TXT"),
         Err(e) => error!("✗ Failed: {}", e),
     }
@@ -1724,7 +1699,7 @@ fn main() -> ! {
     info!("\n=== TEST 3: Reading Files Back ===");
     
     let mut read_buf = [0u8; 1024];
-    match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", &mut read_buf, high_capacity) {
+    match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", &mut read_buf, high_capacity).await {
         Ok(bytes_read) => {
             info!("✓ Read /README.TXT: {} bytes", bytes_read);
             info!("  First 64 bytes: {=[u8]:a}", &read_buf[..64.min(bytes_read)]);
@@ -1732,7 +1707,7 @@ fn main() -> ! {
         Err(e) => error!("✗ Failed to read: {}", e),
     }
 
-    match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", &mut read_buf, high_capacity) {
+    match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", &mut read_buf, high_capacity).await {
         Ok(bytes_read) => {
             info!("✓ Read /DOCS/REPORT.TXT: {} bytes (multi-cluster)", bytes_read);
             if bytes_read == large_data.len() {
@@ -1750,12 +1725,12 @@ fn main() -> ! {
     info!("\n=== TEST 4: Listing Directories ===");
     
     info!("Root directory:");
-    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).ok();
+    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).await.ok();
     
     // List DOCS directory
-    if let Ok(Some(docs_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity) {
+    if let Ok(Some(docs_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity).await {
         info!("\n/DOCS directory:");
-        fat32_list_directory(&mut spi, &mut cs, &fat_info, docs_entry.start_cluster, high_capacity).ok();
+        fat32_list_directory(&mut spi, &mut cs, &fat_info, docs_entry.start_cluster, high_capacity).await.ok();
     }
 
     // ========================================================================
@@ -1774,7 +1749,7 @@ fn main() -> ! {
     
     let mut all_verified = true;
     for (path, expected_type) in &paths_to_verify {
-        match fat32_verify_exists(&mut spi, &mut cs, &fat_info, path, high_capacity) {
+        match fat32_verify_exists(&mut spi, &mut cs, &fat_info, path, high_capacity).await {
             Ok(true) => info!("  ✓ {} exists: {}", expected_type, path),
             Ok(false) => {
                 error!("  ✗ {} NOT FOUND: {}", expected_type, path);
@@ -1788,9 +1763,9 @@ fn main() -> ! {
     }
     
     if all_verified {
-        info!("\n✅ All files and directories verified successfully!");
+        info!("\n All files and directories verified successfully!");
     } else {
-        error!("\n❌ Some files or directories are missing!");
+        error!("\n Some files or directories are missing!");
     }
 
     // ========================================================================
@@ -1799,40 +1774,40 @@ fn main() -> ! {
     info!("\n=== TEST 6: Testing File Deletion ===");
     
     // Delete a file
-    match fat32_delete_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", high_capacity) {
+    match fat32_delete_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", high_capacity).await {
         Ok(()) => info!("✓ Deleted /MYFILE.TXT"),
         Err(e) => error!("✗ Failed to delete file: {}", e),
     }
     
     // Verify file is gone
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", high_capacity) {
+    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", high_capacity).await {
         Ok(false) => info!("✓ Verified /MYFILE.TXT is deleted"),
         Ok(true) => error!("✗ File still exists!"),
         Err(e) => error!("✗ Error verifying: {}", e),
     }
     
     // Delete a file from subdirectory
-    match fat32_delete_file_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS/INFO.TXT", high_capacity) {
+    match fat32_delete_file_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS/INFO.TXT", high_capacity).await {
         Ok(()) => info!("✓ Deleted /PHOTOS/INFO.TXT"),
         Err(e) => error!("✗ Failed: {}", e),
     }
     
     // Delete an empty directory (PHOTOS should be empty now)
-    match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS", high_capacity) {
+    match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS", high_capacity).await {
         Ok(()) => info!("✓ Deleted /PHOTOS directory"),
         Err(e) => error!("✗ Failed to delete directory: {}", e),
     }
     
     // Try to delete a non-empty directory (should fail)
     info!("Testing deletion of non-empty directory (should fail):");
-    match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/DOCS", high_capacity) {
+    match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/DOCS", high_capacity).await {
         Ok(()) => error!("✗ Should not have deleted non-empty directory!"),
         Err(e) => info!("✓ Correctly rejected: {}", e),
     }
     
     // List root directory after deletions
     info!("\nRoot directory after deletions:");
-    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).ok();
+    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).await.ok();
 
     // ========================================================================
     // TEST 7: File Renaming
@@ -1840,26 +1815,26 @@ fn main() -> ! {
     info!("\n=== TEST 7: Testing File Renaming ===");
     
     // Rename a file in the root directory
-    match fat32_rename_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", "WELCOME.TXT", high_capacity) {
+    match fat32_rename_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", "WELCOME.TXT", high_capacity).await {
         Ok(()) => info!("✓ Renamed /README.TXT -> /WELCOME.TXT"),
         Err(e) => error!("✗ Failed to rename: {}", e),
     }
     
     // Verify old name is gone and new name exists
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/README.TXT", high_capacity) {
+    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/README.TXT", high_capacity).await {
         Ok(false) => info!("✓ Verified old name /README.TXT is gone"),
         Ok(true) => error!("✗ Old name still exists!"),
         Err(e) => error!("✗ Error: {}", e),
     }
     
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", high_capacity) {
+    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", high_capacity).await {
         Ok(true) => info!("✓ Verified new name /WELCOME.TXT exists"),
         Ok(false) => error!("✗ New name not found!"),
         Err(e) => error!("✗ Error: {}", e),
     }
     
     // Rename a file in a subdirectory
-    match fat32_rename_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/GUIDE.TXT", "MANUAL.TXT", high_capacity) {
+    match fat32_rename_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/GUIDE.TXT", "MANUAL.TXT", high_capacity).await {
         Ok(()) => info!("✓ Renamed /DOCS/GUIDE.TXT -> /DOCS/MANUAL.TXT"),
         Err(e) => error!("✗ Failed: {}", e),
     }
@@ -1870,45 +1845,45 @@ fn main() -> ! {
     info!("\n=== TEST 8: Testing File Moving ===");
     
     // Move a file from root to MUSIC directory
-    match fat32_move_file(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", "/MUSIC/INFO.TXT", high_capacity) {
+    match fat32_move_file(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", "/MUSIC/INFO.TXT", high_capacity).await {
         Ok(()) => info!("✓ Moved /WELCOME.TXT -> /MUSIC/INFO.TXT"),
         Err(e) => error!("✗ Failed to move: {}", e),
     }
     
     // Verify file is gone from source and exists in destination
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", high_capacity) {
+    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", high_capacity).await {
         Ok(false) => info!("✓ Verified file removed from source"),
         Ok(true) => error!("✗ File still exists in source!"),
         Err(e) => error!("✗ Error: {}", e),
     }
     
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/MUSIC/INFO.TXT", high_capacity) {
+    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/MUSIC/INFO.TXT", high_capacity).await {
         Ok(true) => info!("✓ Verified file exists in destination"),
         Ok(false) => error!("✗ File not found in destination!"),
         Err(e) => error!("✗ Error: {}", e),
     }
     
     // Move and rename a file at the same time
-    match fat32_move_file(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", "/MUSIC/NOTES.TXT", high_capacity) {
+    match fat32_move_file(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", "/MUSIC/NOTES.TXT", high_capacity).await {
         Ok(()) => info!("✓ Moved /DOCS/REPORT.TXT -> /MUSIC/NOTES.TXT"),
         Err(e) => error!("✗ Failed: {}", e),
     }
     
     // List directories to show the changes
     info!("\nRoot directory after rename/move:");
-    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).ok();
+    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).await.ok();
     
-    if let Ok(Some(docs_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity) {
+    if let Ok(Some(docs_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity).await {
         info!("\n/DOCS directory after rename/move:");
-        fat32_list_directory(&mut spi, &mut cs, &fat_info, docs_entry.start_cluster, high_capacity).ok();
+        fat32_list_directory(&mut spi, &mut cs, &fat_info, docs_entry.start_cluster, high_capacity).await.ok();
     }
     
-    if let Ok(Some(music_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "MUSIC", high_capacity) {
+    if let Ok(Some(music_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "MUSIC", high_capacity).await {
         info!("\n/MUSIC directory after move:");
-        fat32_list_directory(&mut spi, &mut cs, &fat_info, music_entry.start_cluster, high_capacity).ok();
+        fat32_list_directory(&mut spi, &mut cs, &fat_info, music_entry.start_cluster, high_capacity).await.ok();
     }
 
     loop {
-        cortex_m::asm::wfi();
+        Timer::after(Duration::from_secs(1)).await;
     }
 }
