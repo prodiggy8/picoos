@@ -1,0 +1,12 @@
+.program	ps2
+
+.wrap_target
+        set x, 10       ; loop counter
+
+    read:
+        wait 0 pin 1        ; await busy clock
+        in pins, 1          ; sample 1 bit from data
+        wait 1 pin 1        ; await idle clock
+        jmp x-- read
+        push
+.wrap
