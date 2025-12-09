@@ -27,6 +27,9 @@ use embassy_time::{Timer, Duration};
 use embedded_hal::digital::OutputPin;  // GPIO output operations (set high/low)
 use embedded_hal::spi::SpiBus;  // SPI communication and clock mode
 
+// ---- heapless for no-std collections ----
+use heapless;  // Vec and String alternatives for embedded systems
+
 // ============================================================================
 // FAT32 FILESYSTEM DATA STRUCTURES
 // ============================================================================
@@ -1608,20 +1611,12 @@ async fn main(_spawner: Spawner) {
     };
 
     // ========================================================================
-    // TEST 1: Create a directory structure
+    // TEST 1: Create a directory structure (minimal for shell demo)
     // ========================================================================
-    info!("\n=== TEST 1: Creating Directory Structure ===");
+    info!("\n=== TEST 1: Creating Basic Directory Structure ===");
     
     match fat32_create_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity).await {
-        Ok(docs_cluster) => {
-            info!("✓ Created /DOCS directory");
-            
-            // Create a subdirectory
-            match fat32_create_directory(&mut spi, &mut cs, &fat_info, docs_cluster, "REPORTS", high_capacity).await {
-                Ok(_) => info!("✓ Created /DOCS/REPORTS subdirectory"),
-                Err(e) => error!("✗ Failed to create subdirectory: {}", e),
-            }
-        }
+        Ok(_) => info!("✓ Created /DOCS directory"),
         Err(e) => error!("✗ Failed to create directory: {}", e),
     }
 
@@ -1631,36 +1626,19 @@ async fn main(_spawner: Spawner) {
     }
 
     // ========================================================================
-    // TEST 2: Write files to different directories
+    // TEST 2: Write minimal files for shell demo
     // ========================================================================
-    info!("\n=== TEST 2: Writing Files to Directories ===");
+    info!("\n=== TEST 2: Writing Basic Files ===");
     
-    let readme_data = b"Welcome to Pico OS Filesystem!\n\nThis filesystem supports:\n- Multi-cluster files\n- Subdirectories\n- Path navigation\n\nBuilt with Rust!";
+    let readme_data = b"Pico OS Shell Demo!\nUse 'help' for commands.";
     match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", readme_data, high_capacity).await {
         Ok(()) => info!("✓ Wrote /README.TXT ({} bytes)", readme_data.len()),
         Err(e) => error!("✗ Failed: {}", e),
     }
 
-    let doc_data = b"Project Documentation\n\nVersion 1.0\nDate: 2025-11-29\n\nThis is a test document in the DOCS folder.";
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/GUIDE.TXT", doc_data, high_capacity).await {
-        Ok(()) => info!("✓ Wrote /DOCS/GUIDE.TXT ({} bytes)", doc_data.len()),
-        Err(e) => error!("✗ Failed: {}", e),
-    }
-
-    // Write a larger multi-cluster file
-    let large_data = b"This is a larger file to test multi-cluster support!\n\
-        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor \
-        incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud \
-        exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure \
-        dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. \
-        Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit \
-        anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium \
-        doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi \
-        architecto beatae vitae dicta sunt explicabo. Nemo enim ipsam voluptatem quia voluptas sit aspernatur \
-        aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt.";
-    
-    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", large_data, high_capacity).await {
-        Ok(()) => info!("✓ Wrote /DOCS/REPORT.TXT ({} bytes, multi-cluster)", large_data.len()),
+    let doc_data = b"Simple test file in DOCS.";
+    match fat32_write_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/HELLO.TXT", doc_data, high_capacity).await {
+        Ok(()) => info!("✓ Wrote /DOCS/HELLO.TXT ({} bytes)", doc_data.len()),
         Err(e) => error!("✗ Failed: {}", e),
     }
 
@@ -1693,197 +1671,427 @@ async fn main(_spawner: Spawner) {
     }
     
 
-    // ========================================================================
-    // TEST 3: Read files back and verify
-    // ========================================================================
-    info!("\n=== TEST 3: Reading Files Back ===");
-    
-    let mut read_buf = [0u8; 1024];
-    match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", &mut read_buf, high_capacity).await {
-        Ok(bytes_read) => {
-            info!("✓ Read /README.TXT: {} bytes", bytes_read);
-            info!("  First 64 bytes: {=[u8]:a}", &read_buf[..64.min(bytes_read)]);
-        }
-        Err(e) => error!("✗ Failed to read: {}", e),
-    }
+    // Skip heavy tests to save memory for shell demo
+    info!("\n=== Basic filesystem ready ===");
 
-    match fat32_read_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", &mut read_buf, high_capacity).await {
-        Ok(bytes_read) => {
-            info!("✓ Read /DOCS/REPORT.TXT: {} bytes (multi-cluster)", bytes_read);
-            if bytes_read == large_data.len() {
-                info!("  ✓ Size matches!");
-            } else {
-                error!("  ✗ Size mismatch! Expected {} got {}", large_data.len(), bytes_read);
-            }
-        }
-        Err(e) => error!("✗ Failed to read: {}", e),
-    }
-
-    // ========================================================================
-    // TEST 4: List directory contents
-    // ========================================================================
-    info!("\n=== TEST 4: Listing Directories ===");
+    // Skip all heavy tests to save memory for shell demo
     
-    info!("Root directory:");
-    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).await.ok();
-    
-    // List DOCS directory
-    if let Ok(Some(docs_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity).await {
-        info!("\n/DOCS directory:");
-        fat32_list_directory(&mut spi, &mut cs, &fat_info, docs_entry.start_cluster, high_capacity).await.ok();
-    }
-
     // ========================================================================
-    // TEST 5: Verify all created files and directories exist
+    // INTERACTIVE SHELL DEMO
     // ========================================================================
-    info!("\n=== TEST 5: Verifying Filesystem Structure ===");
+    info!("\n=== Starting Interactive Shell Demo ===");
     
-    let paths_to_verify = [
-        ("/README.TXT", "FILE"),
-        ("/DOCS", "DIR"),
-        ("/DOCS/GUIDE.TXT", "FILE"),
-        ("/DOCS/REPORT.TXT", "FILE"),
-        ("/DOCS/REPORTS", "DIR"),
-        ("/MUSIC", "DIR"),
-    ];
-    
-    let mut all_verified = true;
-    for (path, expected_type) in &paths_to_verify {
-        match fat32_verify_exists(&mut spi, &mut cs, &fat_info, path, high_capacity).await {
-            Ok(true) => info!("  ✓ {} exists: {}", expected_type, path),
-            Ok(false) => {
-                error!("  ✗ {} NOT FOUND: {}", expected_type, path);
-                all_verified = false;
-            }
-            Err(e) => {
-                error!("  ✗ Error checking {}: {}", path, e);
-                all_verified = false;
-            }
+    // Run the shell demo
+    if let Err(e) = run_shell_demo(&mut spi, &mut cs, &fat_info, high_capacity).await {
+        if e != "exit" {
+            error!("Shell error: {}", e);
         }
     }
-    
-    if all_verified {
-        info!("\n All files and directories verified successfully!");
-    } else {
-        error!("\n Some files or directories are missing!");
-    }
 
-    // ========================================================================
-    // TEST 6: File and Directory Deletion
-    // ========================================================================
-    info!("\n=== TEST 6: Testing File Deletion ===");
-    
-    // Delete a file
-    match fat32_delete_file_at_path(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", high_capacity).await {
-        Ok(()) => info!("✓ Deleted /MYFILE.TXT"),
-        Err(e) => error!("✗ Failed to delete file: {}", e),
-    }
-    
-    // Verify file is gone
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/MYFILE.TXT", high_capacity).await {
-        Ok(false) => info!("✓ Verified /MYFILE.TXT is deleted"),
-        Ok(true) => error!("✗ File still exists!"),
-        Err(e) => error!("✗ Error verifying: {}", e),
-    }
-    
-    // Delete a file from subdirectory
-    match fat32_delete_file_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS/INFO.TXT", high_capacity).await {
-        Ok(()) => info!("✓ Deleted /PHOTOS/INFO.TXT"),
-        Err(e) => error!("✗ Failed: {}", e),
-    }
-    
-    // Delete an empty directory (PHOTOS should be empty now)
-    match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/PHOTOS", high_capacity).await {
-        Ok(()) => info!("✓ Deleted /PHOTOS directory"),
-        Err(e) => error!("✗ Failed to delete directory: {}", e),
-    }
-    
-    // Try to delete a non-empty directory (should fail)
-    info!("Testing deletion of non-empty directory (should fail):");
-    match fat32_delete_directory_at_path(&mut spi, &mut cs, &fat_info, "/DOCS", high_capacity).await {
-        Ok(()) => error!("✗ Should not have deleted non-empty directory!"),
-        Err(e) => info!("✓ Correctly rejected: {}", e),
-    }
-    
-    // List root directory after deletions
-    info!("\nRoot directory after deletions:");
-    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).await.ok();
-
-    // ========================================================================
-    // TEST 7: File Renaming
-    // ========================================================================
-    info!("\n=== TEST 7: Testing File Renaming ===");
-    
-    // Rename a file in the root directory
-    match fat32_rename_file_at_path(&mut spi, &mut cs, &fat_info, "/README.TXT", "WELCOME.TXT", high_capacity).await {
-        Ok(()) => info!("✓ Renamed /README.TXT -> /WELCOME.TXT"),
-        Err(e) => error!("✗ Failed to rename: {}", e),
-    }
-    
-    // Verify old name is gone and new name exists
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/README.TXT", high_capacity).await {
-        Ok(false) => info!("✓ Verified old name /README.TXT is gone"),
-        Ok(true) => error!("✗ Old name still exists!"),
-        Err(e) => error!("✗ Error: {}", e),
-    }
-    
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", high_capacity).await {
-        Ok(true) => info!("✓ Verified new name /WELCOME.TXT exists"),
-        Ok(false) => error!("✗ New name not found!"),
-        Err(e) => error!("✗ Error: {}", e),
-    }
-    
-    // Rename a file in a subdirectory
-    match fat32_rename_file_at_path(&mut spi, &mut cs, &fat_info, "/DOCS/GUIDE.TXT", "MANUAL.TXT", high_capacity).await {
-        Ok(()) => info!("✓ Renamed /DOCS/GUIDE.TXT -> /DOCS/MANUAL.TXT"),
-        Err(e) => error!("✗ Failed: {}", e),
-    }
-
-    // ========================================================================
-    // TEST 8: File Moving
-    // ========================================================================
-    info!("\n=== TEST 8: Testing File Moving ===");
-    
-    // Move a file from root to MUSIC directory
-    match fat32_move_file(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", "/MUSIC/INFO.TXT", high_capacity).await {
-        Ok(()) => info!("✓ Moved /WELCOME.TXT -> /MUSIC/INFO.TXT"),
-        Err(e) => error!("✗ Failed to move: {}", e),
-    }
-    
-    // Verify file is gone from source and exists in destination
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/WELCOME.TXT", high_capacity).await {
-        Ok(false) => info!("✓ Verified file removed from source"),
-        Ok(true) => error!("✗ File still exists in source!"),
-        Err(e) => error!("✗ Error: {}", e),
-    }
-    
-    match fat32_verify_exists(&mut spi, &mut cs, &fat_info, "/MUSIC/INFO.TXT", high_capacity).await {
-        Ok(true) => info!("✓ Verified file exists in destination"),
-        Ok(false) => error!("✗ File not found in destination!"),
-        Err(e) => error!("✗ Error: {}", e),
-    }
-    
-    // Move and rename a file at the same time
-    match fat32_move_file(&mut spi, &mut cs, &fat_info, "/DOCS/REPORT.TXT", "/MUSIC/NOTES.TXT", high_capacity).await {
-        Ok(()) => info!("✓ Moved /DOCS/REPORT.TXT -> /MUSIC/NOTES.TXT"),
-        Err(e) => error!("✗ Failed: {}", e),
-    }
-    
-    // List directories to show the changes
-    info!("\nRoot directory after rename/move:");
-    fat32_list_directory(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, high_capacity).await.ok();
-    
-    if let Ok(Some(docs_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "DOCS", high_capacity).await {
-        info!("\n/DOCS directory after rename/move:");
-        fat32_list_directory(&mut spi, &mut cs, &fat_info, docs_entry.start_cluster, high_capacity).await.ok();
-    }
-    
-    if let Ok(Some(music_entry)) = fat32_find_file(&mut spi, &mut cs, &fat_info, fat_info.root_dir_cluster, "MUSIC", high_capacity).await {
-        info!("\n/MUSIC directory after move:");
-        fat32_list_directory(&mut spi, &mut cs, &fat_info, music_entry.start_cluster, high_capacity).await.ok();
-    }
-
+    // After shell demo, keep the device alive
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }
+}
+
+// ============================================================================
+// COMMAND LINE INTERFACE
+// ============================================================================
+
+/// Represents the current shell state
+struct ShellState {
+    current_path: heapless::String<128>,  // Current working directory (reduced size)
+    current_cluster: u32,  // Current directory cluster
+}
+
+impl ShellState {
+    fn new(root_cluster: u32) -> Self {
+        Self {
+            current_path: heapless::String::new(),
+            current_cluster: root_cluster,
+        }
+    }
+
+    fn set_path(&mut self, path: &str) -> Result<(), &'static str> {
+        self.current_path.clear();
+        self.current_path.push_str(path).map_err(|_| "Path too long")?;
+        Ok(())
+    }
+}
+
+/// Parse and execute a command
+async fn execute_command<SPI, CS>(
+    command: &str,
+    shell_state: &mut ShellState,
+    spi: &mut SPI,
+    cs: &mut CS,
+    fat_info: &Fat32Info,
+    high_capacity: bool,
+) -> Result<(), &'static str>
+where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
+{
+    // Split command into parts
+    let parts: heapless::Vec<&str, 8> = command.trim().split_whitespace().collect();
+    if parts.is_empty() {
+        return Ok(());
+    }
+
+    let cmd = parts[0];
+    match cmd {
+        "ls" | "dir" => {
+            info!("Contents of {}:", if shell_state.current_path.is_empty() { "/" } else { shell_state.current_path.as_str() });
+            fat32_list_directory(spi, cs, fat_info, shell_state.current_cluster, high_capacity).await?;
+        }
+        
+        "pwd" => {
+            if shell_state.current_path.is_empty() {
+                info!("Current directory: /");
+            } else {
+                info!("Current directory: {}", shell_state.current_path.as_str());
+            }
+        }
+        
+        "cd" => {
+            if parts.len() < 2 {
+                info!("Usage: cd <directory>");
+                return Ok(());
+            }
+            
+            let target = parts[1];
+            if target == ".." {
+                // Go to parent directory
+                if !shell_state.current_path.is_empty() {
+                    // Remove last directory from path
+                    if let Some(last_slash) = shell_state.current_path.rfind('/') {
+                        shell_state.current_path.truncate(last_slash);
+                        if shell_state.current_path.is_empty() {
+                            shell_state.current_cluster = fat_info.root_dir_cluster;
+                        } else {
+                            // Find the cluster for the new current directory
+                            match fat32_find_directory_by_path(spi, cs, fat_info, shell_state.current_path.as_str(), high_capacity).await {
+                                Ok(cluster) => shell_state.current_cluster = cluster,
+                                Err(_) => {
+                                    shell_state.current_cluster = fat_info.root_dir_cluster;
+                                    shell_state.current_path.clear();
+                                }
+                            }
+                        }
+                    } else {
+                        shell_state.current_cluster = fat_info.root_dir_cluster;
+                        shell_state.current_path.clear();
+                    }
+                }
+            } else if target == "/" {
+                // Go to root
+                shell_state.current_cluster = fat_info.root_dir_cluster;
+                shell_state.current_path.clear();
+            } else {
+                // Find the directory in current location
+                match fat32_find_file(spi, cs, fat_info, shell_state.current_cluster, target, high_capacity).await {
+                    Ok(Some(entry)) => {
+                        if entry.attr & 0x10 != 0 {  // It's a directory
+                            shell_state.current_cluster = entry.start_cluster;
+                            if !shell_state.current_path.is_empty() {
+                                shell_state.current_path.push('/').map_err(|_| "Path too long")?;
+                            }
+                            shell_state.current_path.push_str(target).map_err(|_| "Path too long")?;
+                        } else {
+                            info!("'{}' is not a directory", target);
+                        }
+                    }
+                    Ok(None) => info!("Directory '{}' not found", target),
+                    Err(e) => info!("Error: {}", e),
+                }
+            }
+        }
+        
+        "cat" | "type" => {
+            if parts.len() < 2 {
+                info!("Usage: cat <filename>");
+                return Ok(());
+            }
+            
+            let filename = parts[1];
+            let mut read_buf = [0u8; 512];  // Reduced buffer size
+            
+            match fat32_find_file(spi, cs, fat_info, shell_state.current_cluster, filename, high_capacity).await {
+                Ok(Some(entry)) => {
+                    if entry.attr & 0x10 == 0 {  // It's a file
+                        match fat32_read_file_content(spi, cs, fat_info, entry, &mut read_buf, high_capacity).await {
+                            Ok(bytes_read) => {
+                                info!("=== {} ({} bytes) ===", filename, bytes_read);
+                                // Print file content (safely handle non-UTF8)
+                                for chunk in read_buf[..bytes_read].chunks(64) {
+                                    info!("{=[u8]:a}", chunk);
+                                }
+                                info!("=== End of {} ===", filename);
+                            }
+                            Err(e) => info!("Error reading file: {}", e),
+                        }
+                    } else {
+                        info!("'{}' is a directory", filename);
+                    }
+                }
+                Ok(None) => info!("File '{}' not found", filename),
+                Err(e) => info!("Error: {}", e),
+            }
+        }
+        
+        "mkdir" => {
+            if parts.len() < 2 {
+                info!("Usage: mkdir <directory_name>");
+                return Ok(());
+            }
+            
+            let dirname = parts[1];
+            match fat32_create_directory(spi, cs, fat_info, shell_state.current_cluster, dirname, high_capacity).await {
+                Ok(_) => info!("Created directory '{}'", dirname),
+                Err(e) => info!("Failed to create directory: {}", e),
+            }
+        }
+        
+        "rm" | "del" => {
+            if parts.len() < 2 {
+                info!("Usage: rm <filename>");
+                return Ok(());
+            }
+            
+            let filename = parts[1];
+            // Build full path for deletion
+            let mut full_path = heapless::String::<256>::new();
+            if !shell_state.current_path.is_empty() {
+                full_path.push_str(&shell_state.current_path).map_err(|_| "Path too long")?;
+                full_path.push('/').map_err(|_| "Path too long")?;
+            } else {
+                full_path.push('/').map_err(|_| "Path too long")?;
+            }
+            full_path.push_str(filename).map_err(|_| "Path too long")?;
+            
+            match fat32_delete_file_at_path(spi, cs, fat_info, full_path.as_str(), high_capacity).await {
+                Ok(()) => info!("Deleted '{}'", filename),
+                Err(e) => info!("Failed to delete: {}", e),
+            }
+        }
+        
+        "rmdir" => {
+            if parts.len() < 2 {
+                info!("Usage: rmdir <directory_name>");
+                return Ok(());
+            }
+            
+            let dirname = parts[1];
+            // Build full path for deletion
+            let mut full_path = heapless::String::<256>::new();
+            if !shell_state.current_path.is_empty() {
+                full_path.push_str(&shell_state.current_path).map_err(|_| "Path too long")?;
+                full_path.push('/').map_err(|_| "Path too long")?;
+            } else {
+                full_path.push('/').map_err(|_| "Path too long")?;
+            }
+            full_path.push_str(dirname).map_err(|_| "Path too long")?;
+            
+            match fat32_delete_directory_at_path(spi, cs, fat_info, full_path.as_str(), high_capacity).await {
+                Ok(()) => info!("Deleted directory '{}'", dirname),
+                Err(e) => info!("Failed to delete directory: {}", e),
+            }
+        }
+        
+        "touch" => {
+            if parts.len() < 2 {
+                info!("Usage: touch <filename>");
+                return Ok(());
+            }
+            
+            let filename = parts[1];
+            let empty_data = b"";
+            
+            // Build full path for creation
+            let mut full_path = heapless::String::<256>::new();
+            if !shell_state.current_path.is_empty() {
+                full_path.push_str(&shell_state.current_path).map_err(|_| "Path too long")?;
+                full_path.push('/').map_err(|_| "Path too long")?;
+            } else {
+                full_path.push('/').map_err(|_| "Path too long")?;
+            }
+            full_path.push_str(filename).map_err(|_| "Path too long")?;
+            
+            match fat32_write_file_at_path(spi, cs, fat_info, full_path.as_str(), empty_data, high_capacity).await {
+                Ok(()) => info!("Created empty file '{}'", filename),
+                Err(e) => info!("Failed to create file: {}", e),
+            }
+        }
+        
+        "help" => {
+            info!("Available commands:");
+            info!("  ls, dir           - List directory contents");
+            info!("  pwd              - Show current directory");
+            info!("  cd <dir>         - Change directory");
+            info!("  cat <file>       - Display file contents");
+            info!("  mkdir <dir>      - Create directory");
+            info!("  rm <file>        - Delete file");
+            info!("  rmdir <dir>      - Delete directory");
+            info!("  touch <file>     - Create empty file");
+            info!("  help             - Show this help");
+            info!("  exit             - Exit shell (run tests)");
+        }
+        
+        "exit" => {
+            info!("Exiting shell...");
+            return Err("exit");  // Use error to signal exit
+        }
+        
+        _ => {
+            info!("Unknown command '{}'. Type 'help' for available commands.", cmd);
+        }
+    }
+    
+    Ok(())
+}
+
+/// Simple command input simulation (since we don't have keyboard input)
+/// This demonstrates how the shell would work with user input
+async fn run_shell_demo<SPI, CS>(
+    spi: &mut SPI,
+    cs: &mut CS,
+    fat_info: &Fat32Info,
+    high_capacity: bool,
+) -> Result<(), &'static str>
+where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
+{
+    let mut shell_state = ShellState::new(fat_info.root_dir_cluster);
+    
+    info!("\n========================================");
+    info!("Welcome to Pico OS File System Shell!");
+    info!("Type 'help' for available commands.");
+    info!("========================================\n");
+    
+    // Simulate some user commands - shorter demo to reduce memory usage
+    let demo_commands = [
+        "help",
+        "pwd",
+        "ls", 
+        "cd DOCS",
+        "pwd",
+        "ls",
+        "cd ..",
+        "pwd",
+        "cd MUSIC", 
+        "ls",
+        "cd /",
+        "ls",
+    ];
+    
+    for command in demo_commands.iter() {
+        info!("\n$ {}", command);
+        Timer::after(Duration::from_millis(300)).await;  // Shorter pause
+        
+        match execute_command(command, &mut shell_state, spi, cs, fat_info, high_capacity).await {
+            Ok(()) => {},
+            Err("exit") => break,
+            Err(e) => info!("Error: {}", e),
+        }
+    }
+    
+    info!("\nShell demo completed!");
+    Ok(())
+}
+
+/// Helper function to find a directory by full path
+async fn fat32_find_directory_by_path<SPI, CS>(
+    spi: &mut SPI,
+    cs: &mut CS,
+    fat_info: &Fat32Info,
+    path: &str,
+    high_capacity: bool,
+) -> Result<u32, &'static str>
+where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
+{
+    if path.is_empty() || path == "/" {
+        return Ok(fat_info.root_dir_cluster);
+    }
+    
+    let mut current_cluster = fat_info.root_dir_cluster;
+    
+    // Split path and navigate through each directory
+    for dir_name in path.split('/').filter(|s| !s.is_empty()) {
+        match fat32_find_file(spi, cs, fat_info, current_cluster, dir_name, high_capacity).await {
+            Ok(Some(entry)) => {
+                if entry.attr & 0x10 != 0 {  // Is directory
+                    current_cluster = entry.start_cluster;
+                } else {
+                    return Err("Not a directory");
+                }
+            }
+            Ok(None) => return Err("Directory not found"),
+            Err(e) => return Err(e),
+        }
+    }
+    
+    Ok(current_cluster)
+}
+
+/// Read file content directly from a directory entry
+async fn fat32_read_file_content<SPI, CS>(
+    spi: &mut SPI,
+    cs: &mut CS,
+    fat_info: &Fat32Info,
+    entry: DirEntry,
+    buf: &mut [u8],
+    high_capacity: bool,
+) -> Result<usize, &'static str>
+where
+    SPI: SpiBus<u8>,
+    CS: OutputPin,
+{
+    let mut current_cluster = entry.start_cluster;
+    let mut bytes_read = 0;
+    let mut buf_offset = 0;
+    
+    // Read cluster chain
+    loop {
+        if current_cluster < 2 || current_cluster >= 0x0FFF_FFF8 {
+            break;  // Invalid or end-of-chain
+        }
+        
+        // Calculate cluster size in bytes
+        let cluster_size = fat_info.sectors_per_cluster as usize * fat_info.bytes_per_sector as usize;
+        let remaining_buf = buf.len() - buf_offset;
+        let remaining_file = entry.size as usize - bytes_read;
+        let to_read = cluster_size.min(remaining_buf).min(remaining_file);
+        
+        if to_read == 0 {
+            break;
+        }
+        
+        // Read the cluster
+        let cluster_lba = fat_info.cluster_to_lba(current_cluster);
+        let mut cluster_buf = [0u8; 512];
+        
+        for sector_offset in 0..fat_info.sectors_per_cluster {
+            let sector_lba = cluster_lba + sector_offset as u32;
+            sd_read_block(spi, cs, sector_lba, &mut cluster_buf, high_capacity).await?;
+            
+            let sector_to_read = (512).min(to_read - (sector_offset as usize * 512)).min(remaining_file - bytes_read);
+            if sector_to_read > 0 {
+                buf[buf_offset..buf_offset + sector_to_read].copy_from_slice(&cluster_buf[..sector_to_read]);
+                buf_offset += sector_to_read;
+                bytes_read += sector_to_read;
+            }
+        }
+        
+        if bytes_read >= entry.size as usize {
+            break;
+        }
+        
+        // Get next cluster from FAT
+        current_cluster = fat_info.read_fat_entry(spi, cs, current_cluster, high_capacity).await?;
+    }
+    
+    Ok(bytes_read)
 }
