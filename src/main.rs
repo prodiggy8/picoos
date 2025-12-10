@@ -36,7 +36,7 @@ mod userland;
 
 use keyboard::ps2::input_reader;
 use dvi::dvi::Dvi;
-use userland::{dummy_program, user_task_runner};
+use userland::{dummy_program, keyboard_program, user_task_runner};
 
 bind_interrupts!(struct Irqs {
     PIO0_IRQ_0 => InterruptHandler<PIO0>;
@@ -104,7 +104,7 @@ fn invoke_shell(
 
     // Ignore CTRL-Z: shell never leaves the foreground except if substitute is invoked
     } else if ch == '\x1A' {
-        continue;
+        // Do nothing
 
     // Handle every other character
     } else {
@@ -150,7 +150,7 @@ async fn main(spawner: Spawner) {
     let mut shell_buffer = String::<128>::new();
 
     // Print dummy program address for testing
-    core::write!(output_buffer, "Dummy Program Address: 0x{:x}\n$ ", dummy_program as usize).ok();
+    core::write!(output_buffer, "Loaded p1 to 0x{:x}\nLoaded p2 to 0x{:x}\n$ ", dummy_program as usize, keyboard_program as usize).ok();
 
     let mut led  = Output::new(p.PIN_15, Level::Low);
 
@@ -159,8 +159,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(input_reader(pio.sm1, char_channel.sender())).unwrap();
     
     let mut args = String::<64>::new();
-    core::write!(args, "Hello World").ok();
-    spawner.spawn(user_task_runner(dummy_program as usize, args)).unwrap();
+    // core::write!(args, "Hello World").ok();
+    // spawner.spawn(user_task_runner(dummy_program as usize, args)).unwrap();
     let mut foreground = false;
 
     loop {

@@ -1,4 +1,3 @@
-use defmt::{warn, println};
 use embassy_rp::pio::StateMachine;
 use embassy_rp::peripherals::PIO0;
 use embassy_sync::channel::Sender;
@@ -84,16 +83,16 @@ pub async fn input_reader(
         
         // Stop signal is always high
         if !(start == 0) {
-            warn!("[Keyboard.input_reader] Bad start bit in {=u8:02x}", code);
+            // Bad start bit
 
         } else if !(stop == 1) {
-            warn!("[Keyboard.input_reader] Bad stop bit in {=u8:02x}", code);
+            // Bad stop bit
 
         } else {
             let parity_chk = ((code.count_ones() + parity) & 1) == 1;
 
             if !parity_chk {
-                warn!("[Keyboard.input_reader] Parity error in {=u8:02x}", code);
+                // Parity error
 
             } else {
                 match state {
@@ -110,7 +109,6 @@ pub async fn input_reader(
                             0x14 => {
                                 // Left or Right Ctrl pressed
                                 ctrl_pressed = true;
-                                println!("CTRL pressed");
                             }
                             0x12 | 0x59 => {
                                 shift_pressed = true;
@@ -129,14 +127,12 @@ pub async fn input_reader(
                                         // Ctrl+key combinations
                                         match ch {
                                             'c' => {
-                                                println!("CTRL-C");
                                                 sender.try_send('\x03').ok();
                                             }
                                             'z' => {
-                                                println!("CTRL-Z");
                                                 sender.try_send('\x1A').ok();
                                             }
-                                            _ => println!("CTRL+{}", ch),
+                                            _ => {}
                                         }
                                     } else {
                                         let _ = current_line.push(ch);
@@ -151,7 +147,6 @@ pub async fn input_reader(
                         if code == 0x14 {
                             // Ctrl released
                             ctrl_pressed = false;
-                            println!("CTRL released");
                         } else if code == 0x12 || code == 0x59 {
                             shift_pressed = false;
                         }
@@ -165,19 +160,15 @@ pub async fn input_reader(
                                 state = PS2State::ExtendedBreak;
                             }
                             0x6B => {
-                                println!("Key event: ARROW LEFT");
                                 state = PS2State::Idle;
                             }
                             0x74 => {
-                                println!("Key event: ARROW RIGHT");
                                 state = PS2State::Idle;
                             }
                             0x6C => {
-                                println!("Key event: HOME");
                                 state = PS2State::Idle;
                             }
                             0x69 => {
-                                println!("Key event: END");
                                 state = PS2State::Idle;
                             }
                             _ => {
