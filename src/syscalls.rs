@@ -3,19 +3,18 @@
 use embassy_sync::channel::Channel;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 
-// Global channel for userland output
+// userland output
 pub static DISPLAY_CHANNEL: Channel<ThreadModeRawMutex, char, 256> = Channel::new();
 
-// Global channel for userland input
+// userland input
 pub static INPUT_CHANNEL: Channel<ThreadModeRawMutex, char, 32> = Channel::new();
 
 #[repr(C)]
 pub struct SyscallTable {
     pub print: extern "C" fn(*const u8, usize),
-    pub read: extern "C" fn() -> u32, // Returns char cast to u32, or 0 if empty
+    pub read: extern "C" fn() -> u32, 
 }
 
-// --- System Call ---
 // This function is passed to userland programs to allow them to print.
 // In the future, we should pass a syscall table that programs can use!
 pub extern "C" fn sys_print(ptr: *const u8, len: usize) {

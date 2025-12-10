@@ -1,6 +1,7 @@
 use heapless::String;
 use crate::syscalls::{sys_print, sys_read, SyscallTable};
 use embassy_time::Timer;
+use core::fmt::Write;
 
 static mut KEYBOARD_BUFFER: String<64> = String::new();
 
@@ -57,9 +58,37 @@ pub extern "C" fn keyboard_program(
     1 // Continue
 }
 
+#[inline(never)]
+#[link_section = ".data.ramfunc"]
+#[no_mangle]
+pub extern "C" fn counter_program(
+    table: &SyscallTable,
+    _args_ptr: *const u8,
+    _args_len: usize
+) -> u32 {
+    static mut COUNTER: u32 = 0;
+    
+    let counter = unsafe { &mut COUNTER };
+    
+    if *counter < 250 {
+        *counter += 1;
+        
+        // Print simple message
+        let msg = "Count: X\n";
+        (table.print)(msg.as_ptr(), msg.len());
+        
+        1 // Continue
+    } else {
+        // Reset counter for next run
+        *counter = 0;
+        let done_msg = "Counter finished!\n";
+        (table.print)(done_msg.as_ptr(), done_msg.len());
+        0 // Exit
+    }
+}
+
 #[embassy_executor::task(pool_size = 2)]
 pub async fn user_task_runner(addr: usize, args: String<64>) {
-    // Signature: fn(&SyscallTable, args_ptr, args_len) -> u32
     let program: extern "C" fn(
         &SyscallTable,
         *const u8,

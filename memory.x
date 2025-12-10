@@ -16,3 +16,22 @@ SECTIONS {
     } > BOOT2
 } INSERT BEFORE .text;
 
+
+SECTIONS {
+    /* ### Small 4kb memory sections for high bandwidth code or data per core */
+    .scratch_x : {
+        _scratch_x_start = .;
+        *(.scratch_x .scratch_x.*)
+        . = ALIGN(4);
+        _scratch_x_end = .;
+    } > SCRATCH_X AT > FLASH
+    _scratch_x_source = LOADADDR(.scratch_x);
+
+    .scratch_y : {
+        _scratch_y_start = .;
+        *(.scratch_y .scratch_y.*)
+        . = ALIGN(4);
+        _scratch_y_end = .;
+    } > SCRATCH_Y AT > FLASH
+    _scratch_y_source = LOADADDR(.scratch_y);
+} INSERT AFTER .rodata;
