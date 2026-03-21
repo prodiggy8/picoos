@@ -6,7 +6,7 @@ A bare-metal, very simple operating system for the RP2040/RPI Pico-W written in 
 
 - shell with Unix-like commands
 - SD card support with a FAT32-like file system
-- text display via DVI
+- text display via DVI, based on [DusterTheFirst's implementation](https://github.com/DusterTheFirst/pico-dvi-rs) 
 - PS2 keyboard input via PIO
 - run programs with syscalls (print, read)
 - load and execute ELF binaries
