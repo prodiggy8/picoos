@@ -1,0 +1,9 @@
+﻿Designator,Footprint,Quantity,Value,LCSC Part #
+D5,D_DO-41_SOD81_P10.16mm_Horizontal,1,1N4001,
+J6,BarrelJack_Horizontal,1,Barrel_Jack,
+JDVI,PinHeader_1x11_P2.54mm_Vertical,1,Conn_01x11_Pin,
+JPS2,PinHeader_1x04_P2.54mm_Vertical,1,Conn_01x04_Pin,
+JSD,PinHeader_1x06_P2.54mm_Vertical,1,Conn_01x06_Pin,
+SWRESET,SW_PUSH_6mm,1,SW_Push,
+UCORE,RPi_Pico_SMD_TH,1,Pico W - Core,
+UGRAPHICS,RPi_Pico_SMD_TH,1,Pico DVI,
