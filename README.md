@@ -1,24 +1,27 @@
-# 15-348 Rust Template
+##### PicoOS
 
-## Overview
+A bare-metal, very simple operating system for the RP2040/RPI Pico-W written in Rust. Built on [Embassy](https://embassy.dev/).
 
-This is a `cargo generate` template for bare metal Rust on the rp2040.  This is meant to be the starter code for homework and projects in 15-348: Embedded Systems at Carnegie Mellon University in Qatar.
+**Features**
 
-## Usage
+- shell with Unix-like commands
+- SD card support with a FAT32-like file system
+- text display via DVI, based on [DusterTheFirst's implementation](https://github.com/DusterTheFirst/pico-dvi-rs) 
+- PS2 keyboard input via PIO
+- run programs with syscalls (print, read)
+- load and execute ELF binaries
+- CYW43 wireless support
+- TCP/IP stack via embassy-net
+- debug with websockets
 
-- Change to a directory where you want your new project to live.  The new project will be a subdirectory of that directory.  For example, you might want to be in a `homeworks/` directory.  (And inside you'll make a `hw2` project.)
-- `cargo generate --git https://github.com/CMUQ-15-348/rp2040-template`
-- Choose a name for your project (like `hw2`)
-- `cd hw2`
-- `cargo run`
+##### Prerequisites
 
-## Features
+- [Rust](https://rustup.rs/) with `thumbv6m-none-eabi` target
+- [probe-rs](https://probe.rs/) for flashing (or [elf2uf2-rs](https://crates.io/crates/elf2uf2-rs) for USB boot mode)
+- See PCB above for details on peripherals
 
-This template includes...
+##### Build & Run
 
-- A `Cargo.toml` with basic dependencies.
-- A `src/main.rs` that blinks the LED
-- A starter library for properly configuring the system clocks.
-- A starter library for direct control register access
-- A `.cargo/config.toml` that properly sets up using `probe-rs` to program and execute code
-- A `.vscode/` directory that allows for single step debugging, assuming that you have a suitable `openocd` and `gdb` installed.
+```bash
+cargo run
+```

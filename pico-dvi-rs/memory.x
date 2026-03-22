@@ -1,7 +1,7 @@
 MEMORY {
-    BOOT2 : ORIGIN = 0x10000000, LENGTH = 0x100
-    FLASH : ORIGIN = 0x10000100, LENGTH = 2048K - 0x100
-    RAM   : ORIGIN = 0x20000000, LENGTH = 256K
+    BOOT2(rx)   : ORIGIN = 0x10000000, LENGTH = 0x100
+    FLASH(rx)  : ORIGIN = 0x10000100, LENGTH = 2048K - 0x100
+    RAM(rwx)    : ORIGIN = 0x20000000, LENGTH = 256K
     SCRATCH_X(rwx) : ORIGIN = 0x20040000, LENGTH = 4k
     SCRATCH_Y(rwx) : ORIGIN = 0x20041000, LENGTH = 4k
 }
@@ -10,12 +10,18 @@ EXTERN(BOOT2_FIRMWARE)
 
 SECTIONS {
     /* ### Boot loader */
-    .boot2 ORIGIN(BOOT2) :
-    {
+    .boot2 ORIGIN(BOOT2) : {
         KEEP(*(.boot2));
     } > BOOT2
 } INSERT BEFORE .text;
 
+SECTIONS {
+    /* ### Main ram section */
+    .ram : {
+        *(.ram .ram.*)
+        . = ALIGN(4);
+    } > RAM AT > FLASH
+} INSERT AFTER .data;
 
 SECTIONS {
     /* ### Small 4kb memory sections for high bandwidth code or data per core */
